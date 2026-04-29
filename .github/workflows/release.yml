@@ -156,8 +156,6 @@ jobs:
             "${{ steps.binaries.outputs.rpm_amd64 }}.bundle"
           sign_with_retry "${{ steps.binaries.outputs.rpm_arm64 }}" \
             "${{ steps.binaries.outputs.rpm_arm64 }}.bundle"
-          sign_with_retry "stepsecurity-dev-machine-guard.sh" \
-            "dist/stepsecurity-dev-machine-guard.sh.bundle"
       - name: Upload cosign bundles
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -172,7 +170,6 @@ jobs:
             "${{ steps.binaries.outputs.deb_arm64 }}.bundle" \
             "${{ steps.binaries.outputs.rpm_amd64 }}.bundle" \
             "${{ steps.binaries.outputs.rpm_arm64 }}.bundle" \
-            dist/stepsecurity-dev-machine-guard.sh.bundle \
             --clobber
 
       - name: Attest build provenance
@@ -188,4 +185,3 @@ jobs:
             ${{ steps.binaries.outputs.deb_arm64 }}
             ${{ steps.binaries.outputs.rpm_amd64 }}
             ${{ steps.binaries.outputs.rpm_arm64 }}
-            stepsecurity-dev-machine-guard.sh
