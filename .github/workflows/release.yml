@@ -91,8 +91,8 @@ jobs:
           DARWIN=$(find dist -type f -name '*darwin_unnotarized' | head -1)
           WIN_AMD64=$(find dist -type f -name '*.exe' -path '*windows_amd64*' | head -1)
           WIN_ARM64=$(find dist -type f -name '*.exe' -path '*windows_arm64*' | head -1)
-          LINUX_AMD64=$(find dist -type f -name '*-linux_amd64' | head -1)
-          LINUX_ARM64=$(find dist -type f -name '*-linux_arm64' | head -1)
+          LINUX_AMD64=$(find dist -type f -name 'stepsecurity-dev-machine-guard' -path '*linux_amd64*' | head -1)
+          LINUX_ARM64=$(find dist -type f -name 'stepsecurity-dev-machine-guard' -path '*linux_arm64*' | head -1)
 
           DEB_AMD64=$(find dist -type f -name '*-amd64.deb' | head -1)
           DEB_ARM64=$(find dist -type f -name '*-arm64.deb' | head -1)
