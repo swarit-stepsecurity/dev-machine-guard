@@ -16,9 +16,12 @@ import (
 
 const unitName = "stepsecurity-dev-machine-guard"
 
-// Install configures a systemd user timer for periodic scanning.
-// If already installed, upgrades by removing and re-creating the units.
-func Install(exec executor.Executor, log *progress.Logger) error {
+// Install configures a systemd user unit for the agent.
+// When longRunning is false (default), installs an oneshot service + timer that
+// fires every `config.ScanFrequencyHours`. When true, installs a single
+// Type=simple service that runs `dmg daemon` and is restarted on failure.
+// If already installed (either variant), upgrades by removing and re-creating.
+func Install(exec executor.Executor, log *progress.Logger, longRunning bool) error {
 	ctx := context.Background()
 
 	// Check for existing installation and upgrade
@@ -57,25 +60,25 @@ func Install(exec executor.Executor, log *progress.Logger) error {
 		Hours:      hours,
 	}
 
-	// Write service unit
+	if longRunning {
+		return installLongRunning(ctx, exec, log, unitDir, logDir, data)
+	}
+	return installTimer(ctx, exec, log, unitDir, logDir, data, hours)
+}
+
+func installTimer(ctx context.Context, exec executor.Executor, log *progress.Logger, unitDir, logDir string, data unitTemplateData, hours int) error {
 	servicePath := filepath.Join(unitDir, unitName+".service")
 	if err := writeTemplate(servicePath, serviceTmpl, data); err != nil {
 		return fmt.Errorf("writing service unit: %w", err)
 	}
 
-	// Write timer unit
 	timerPath := filepath.Join(unitDir, unitName+".timer")
 	if err := writeTemplate(timerPath, timerTmpl, data); err != nil {
 		return fmt.Errorf("writing timer unit: %w", err)
 	}
 
-	// Reload and enable
-	_, daemonStderr, daemonExitCode, err := exec.Run(ctx, "systemctl", "--user", "daemon-reload")
-	if err != nil {
-		return fmt.Errorf("daemon-reload failed: %w", err)
-	}
-	if daemonExitCode != 0 {
-		return fmt.Errorf("daemon-reload failed (exit code %d): %s", daemonExitCode, daemonStderr)
+	if err := daemonReload(ctx, exec); err != nil {
+		return err
 	}
 
 	_, stderr, exitCode, err := exec.Run(ctx, "systemctl", "--user", "enable", "--now", unitName+".timer")
@@ -96,6 +99,45 @@ func Install(exec executor.Executor, log *progress.Logger) error {
 	return nil
 }
 
+func installLongRunning(ctx context.Context, exec executor.Executor, log *progress.Logger, unitDir, logDir string, data unitTemplateData) error {
+	// In long-running mode the service IS the agent — no timer.
+	servicePath := filepath.Join(unitDir, unitName+".service")
+	if err := writeTemplate(servicePath, longRunningServiceTmpl, data); err != nil {
+		return fmt.Errorf("writing long-running service unit: %w", err)
+	}
+
+	if err := daemonReload(ctx, exec); err != nil {
+		return err
+	}
+
+	_, stderr, exitCode, err := exec.Run(ctx, "systemctl", "--user", "enable", "--now", unitName+".service")
+	if err != nil {
+		return fmt.Errorf("failed to enable service: %w", err)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("failed to enable service (exit code %d): %s", exitCode, stderr)
+	}
+
+	log.Progress("systemd user service (long-running) configuration completed successfully")
+	log.Progress("  Service: %s", servicePath)
+	log.Progress("  Logs:    %s/agent.log", logDir)
+	log.Progress("Installation complete!")
+	log.Progress("The agent is now running as a persistent service (experimental --long-running)")
+
+	return nil
+}
+
+func daemonReload(ctx context.Context, exec executor.Executor) error {
+	_, stderr, exitCode, err := exec.Run(ctx, "systemctl", "--user", "daemon-reload")
+	if err != nil {
+		return fmt.Errorf("daemon-reload failed: %w", err)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("daemon-reload failed (exit code %d): %s", exitCode, stderr)
+	}
+	return nil
+}
+
 // Uninstall removes the systemd user timer and service units.
 func Uninstall(exec executor.Executor, log *progress.Logger) error {
 	ctx := context.Background()
@@ -109,11 +151,14 @@ func Uninstall(exec executor.Executor, log *progress.Logger) error {
 }
 
 func doUninstall(ctx context.Context, exec executor.Executor, log *progress.Logger) error {
-	// Disable and stop the timer
+	// Disable both the timer (classic mode) and the service (long-running
+	// mode). Either may be missing depending on which install path was used;
+	// disable returns non-zero in that case but we don't care.
 	_, _, _, _ = exec.Run(ctx, "systemctl", "--user", "disable", "--now", unitName+".timer")
-	log.Progress("Disabled systemd timer")
+	_, _, _, _ = exec.Run(ctx, "systemctl", "--user", "disable", "--now", unitName+".service")
+	log.Progress("Disabled systemd units")
 
-	// Stop the service if running
+	// Stop service in case it was started without enable.
 	_, _, _, _ = exec.Run(ctx, "systemctl", "--user", "stop", unitName+".service")
 
 	// Remove unit files
@@ -134,7 +179,11 @@ func doUninstall(ctx context.Context, exec executor.Executor, log *progress.Logg
 }
 
 func isConfigured(ctx context.Context, exec executor.Executor) bool {
-	stdout, _, _, _ := exec.Run(ctx, "systemctl", "--user", "list-timers", "--no-pager")
+	// Detect either install variant: timer (classic) or persistent service.
+	if stdout, _, _, _ := exec.Run(ctx, "systemctl", "--user", "list-timers", "--no-pager"); strings.Contains(stdout, unitName) {
+		return true
+	}
+	stdout, _, _, _ := exec.Run(ctx, "systemctl", "--user", "list-units", "--type=service", "--all", "--no-pager")
 	return strings.Contains(stdout, unitName)
 }
 
@@ -184,4 +233,22 @@ Persistent=true
 
 [Install]
 WantedBy=timers.target
+`
+
+// longRunningServiceTmpl is the unit used by `install --long-running`. The
+// binary's `daemon` subcommand owns the scan cadence in-process, so the unit
+// itself has no timer; systemd just keeps it alive via Restart=on-failure.
+const longRunningServiceTmpl = `[Unit]
+Description=StepSecurity Dev Machine Guard (long-running)
+
+[Service]
+Type=simple
+ExecStart={{.BinaryPath}} daemon
+Restart=on-failure
+RestartSec=30s
+StandardOutput=append:{{.LogDir}}/agent.log
+StandardError=append:{{.LogDir}}/agent.error.log
+
+[Install]
+WantedBy=default.target
 `

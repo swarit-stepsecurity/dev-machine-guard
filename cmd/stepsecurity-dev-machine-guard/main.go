@@ -135,13 +135,20 @@ func main() {
 				os.Exit(1)
 			}
 		case "linux":
-			if err := systemd.Install(exec, log); err != nil {
+			if err := systemd.Install(exec, log, cfg.LongRunning); err != nil {
 				log.Error("%v", err)
 				os.Exit(1)
 			}
 		default:
 			log.Error("Scheduled installation is not supported on %s", runtime.GOOS)
 			os.Exit(1)
+		}
+		if cfg.LongRunning && runtime.GOOS == "linux" {
+			// Service is already running and will emit telemetry on its first
+			// loop tick; skip the synchronous initial send to avoid contending
+			// with the just-started daemon for the lock file.
+			log.Progress("Long-running service started; initial telemetry will be sent by the daemon process.")
+			break
 		}
 		log.Progress("Sending initial telemetry...")
 		fmt.Println()
@@ -178,6 +185,19 @@ func main() {
 
 	case "hooks uninstall":
 		os.Exit(aiagentscli.RunUninstall(context.Background(), exec, cfg.HooksAgent, os.Stdout, os.Stderr))
+
+	case "daemon":
+		// Long-running mode entrypoint, invoked by the systemd user service
+		// installed via `install --long-running`. Loops telemetry on the
+		// configured interval and exits cleanly on SIGTERM/SIGINT.
+		if !config.IsEnterpriseMode() {
+			log.Error("Enterprise configuration not found. The `daemon` command requires enterprise credentials.")
+			os.Exit(1)
+		}
+		if err := runDaemon(exec, log, cfg); err != nil {
+			log.Error("%v", err)
+			os.Exit(1)
+		}
 
 	default:
 		// Community mode or auto-detect enterprise

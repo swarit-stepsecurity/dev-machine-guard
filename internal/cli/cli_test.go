@@ -172,6 +172,38 @@ func TestParse_UnknownOption(t *testing.T) {
 	}
 }
 
+func TestParse_LongRunningFlag(t *testing.T) {
+	cfg, err := Parse([]string{"install", "--long-running"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Command != "install" {
+		t.Errorf("expected command=install, got %q", cfg.Command)
+	}
+	if !cfg.LongRunning {
+		t.Error("expected LongRunning=true")
+	}
+
+	// Without --long-running it must default to false.
+	cfg, err = Parse([]string{"install"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LongRunning {
+		t.Error("expected LongRunning=false by default")
+	}
+}
+
+func TestParse_DaemonCommand(t *testing.T) {
+	cfg, err := Parse([]string{"daemon"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Command != "daemon" {
+		t.Errorf("expected daemon, got %q", cfg.Command)
+	}
+}
+
 func TestParse_FlagCombinations(t *testing.T) {
 	cfg, err := Parse([]string{"--json", "--verbose", "--color=never"})
 	if err != nil {

@@ -17,7 +17,7 @@ import (
 // failure, so the hot path bypasses cli.Parse entirely — see main.go's
 // early-return and internal/aiagents/cli.RunHook.
 type Config struct {
-	Command               string   // "", "install", "uninstall", "send-telemetry", "configure", "configure show", "hooks install", "hooks uninstall"
+	Command               string   // "", "install", "uninstall", "send-telemetry", "configure", "configure show", "hooks install", "hooks uninstall", "daemon"
 	OutputFormat          string   // "pretty", "json", "html"
 	OutputFormatSet       bool     // true if --pretty/--json/--html was explicitly passed (not persisted)
 	HTMLOutputFile        string   // set by --html (not persisted)
@@ -28,6 +28,7 @@ type Config struct {
 	EnableBrewScan        *bool    // nil=auto, true/false=explicit
 	EnablePythonScan      *bool    // nil=auto, true/false=explicit
 	IncludeBundledPlugins bool     // --include-bundled-plugins: include bundled/platform plugins in output
+	LongRunning           bool     // --long-running: install as a persistent process (Linux/systemd, experimental)
 	SearchDirs            []string // defaults to ["$HOME"]
 
 	// HooksAgent is the --agent value on `hooks install` / `hooks uninstall`;
@@ -74,6 +75,10 @@ func Parse(args []string) (*Config, error) {
 			cfg.Command = "uninstall"
 		case arg == "send-telemetry" || arg == "--send-telemetry":
 			cfg.Command = "send-telemetry"
+		case arg == "daemon":
+			cfg.Command = "daemon"
+		case arg == "--long-running":
+			cfg.LongRunning = true
 		case arg == "configure":
 			// Check for "configure show" subcommand
 			if i+1 < len(args) && args[i+1] == "show" {
@@ -284,6 +289,8 @@ Options:
   --enable-python-scan          Enable Python package scanning
   --disable-python-scan         Disable Python package scanning
   --include-bundled-plugins     Include bundled/platform plugins in output (Windows)
+  --long-running         (experimental, Linux only) Install as a persistent
+                         systemd user service instead of a periodic timer.
   --log-level=LEVEL      Log level: error | warn | info | debug (default: info)
   --verbose                     Shortcut for --log-level=debug
   --color=WHEN           Color mode: auto | always | never (default: auto)
