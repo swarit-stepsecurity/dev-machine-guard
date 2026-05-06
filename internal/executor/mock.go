@@ -36,6 +36,9 @@ type Mock struct {
 
 	// Glob stubs
 	globs map[string][]string
+
+	// Symlink stubs: path -> resolved target
+	symlinks map[string]string
 }
 
 type cmdResult struct {
@@ -55,6 +58,7 @@ func NewMock() *Mock {
 		paths:     make(map[string]string),
 		env:       make(map[string]string),
 		globs:     make(map[string][]string),
+		symlinks:  make(map[string]string),
 		hostname:  "test-host",
 		username:  "testuser",
 		homeDir:   "/Users/testuser",
@@ -145,6 +149,15 @@ func (m *Mock) SetGlob(pattern string, matches []string) {
 	m.globs[pattern] = matches
 }
 
+// SetSymlink stubs a symlink resolution: EvalSymlinks(path) -> target.
+// If a path is not registered, EvalSymlinks returns the path unchanged
+// (matching the behavior of filepath.EvalSymlinks on a non-symlink).
+func (m *Mock) SetSymlink(path, target string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.symlinks[path] = target
+}
+
 func (m *Mock) SetGOOS(goos string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -164,6 +177,10 @@ func (m *Mock) Run(_ context.Context, name string, args ...string) (string, stri
 }
 
 func (m *Mock) RunWithTimeout(ctx context.Context, _ time.Duration, name string, args ...string) (string, string, int, error) {
+	return m.Run(ctx, name, args...)
+}
+
+func (m *Mock) RunInDir(ctx context.Context, _ string, _ time.Duration, name string, args ...string) (string, string, int, error) {
 	return m.Run(ctx, name, args...)
 }
 
@@ -271,6 +288,16 @@ func (m *Mock) LoggedInUser() (*user.User, error) {
 	return m.CurrentUser()
 }
 
+func (m *Mock) EvalSymlinks(path string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if target, ok := m.symlinks[path]; ok {
+		return target, nil
+	}
+	// Default: behave like a non-symlink — return the path unchanged.
+	return path, nil
+}
+
 func (m *Mock) GOOS() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -296,3 +323,25 @@ func (fi *mockFileInfo) IsDir() bool        { return fi.dir }
 func (fi *mockFileInfo) ModTime() time.Time { return time.Time{} }
 func (fi *mockFileInfo) Mode() os.FileMode  { return 0o644 }
 func (fi *mockFileInfo) Sys() any           { return nil }
+
+// MockDirEntry creates an os.DirEntry for use with SetDirEntries.
+func MockDirEntry(name string, isDir bool) os.DirEntry {
+	return &mockDirEntry{name: name, dir: isDir}
+}
+
+type mockDirEntry struct {
+	name string
+	dir  bool
+}
+
+func (e *mockDirEntry) Name() string { return e.name }
+func (e *mockDirEntry) IsDir() bool  { return e.dir }
+func (e *mockDirEntry) Type() os.FileMode {
+	if e.dir {
+		return os.ModeDir
+	}
+	return 0
+}
+func (e *mockDirEntry) Info() (os.FileInfo, error) {
+	return &mockFileInfo{name: e.name, dir: e.dir}, nil
+}

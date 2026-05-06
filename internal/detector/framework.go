@@ -3,7 +3,6 @@ package detector
 import (
 	"context"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/executor"
@@ -77,32 +76,41 @@ func (d *FrameworkDetector) getVersion(ctx context.Context, binaryPath string) s
 	if err != nil {
 		return "unknown"
 	}
-	lines := strings.SplitN(stdout, "\n", 2)
-	if len(lines) > 0 {
-		v := strings.TrimSpace(lines[0])
-		if v != "" {
-			return v
-		}
-	}
-	return "unknown"
+	return extractVersionFromOutput(stdout)
 }
 
 func (d *FrameworkDetector) detectLMStudioApp(ctx context.Context) (model.AITool, bool) {
 	var appPath, version string
 
-	if d.exec.GOOS() == "windows" {
+	switch d.exec.GOOS() {
+	case model.PlatformWindows:
 		localAppData := d.exec.Getenv("LOCALAPPDATA")
 		appPath = filepath.Join(localAppData, "Programs", "LM Studio")
 		if !d.exec.DirExists(appPath) {
 			return model.AITool{}, false
 		}
 		version = readRegistryVersion(ctx, d.exec, "LM Studio")
-	} else {
+	case model.PlatformDarwin:
 		appPath = "/Applications/LM Studio.app"
 		if !d.exec.DirExists(appPath) {
 			return model.AITool{}, false
 		}
 		version = readPlistVersion(ctx, d.exec, filepath.Join(appPath, "Contents", "Info.plist"))
+	default: // linux — check common install locations
+		homeDir := getHomeDir(d.exec)
+		for _, candidate := range []string{
+			filepath.Join(homeDir, ".local", "share", "LM Studio"),
+			"/opt/lm-studio",
+		} {
+			if d.exec.DirExists(candidate) {
+				appPath = candidate
+				break
+			}
+		}
+		if appPath == "" {
+			return model.AITool{}, false
+		}
+		version = "unknown"
 	}
 
 	running := isProcessRunningFuzzy(ctx, d.exec, "LM Studio")
