@@ -15,14 +15,21 @@ var (
 	APIEndpoint        = "{{API_ENDPOINT}}"
 	APIKey             = "{{API_KEY}}"
 	ScanFrequencyHours = "{{SCAN_FREQUENCY_HOURS}}"
-	SearchDirs         []string
-	EnableNPMScan      *bool  // nil=auto
-	EnableBrewScan     *bool  // nil=auto
-	EnablePythonScan   *bool  // nil=auto
-	ColorMode          string // "" means auto
-	OutputFormat       string // "" means default (pretty)
-	HTMLOutputFile     string // "" means not set
-	LogLevel           string // "" means default (info); one of error/warn/info/debug
+	// WSEndpoint is the absolute wss:// URL the long-running daemon
+	// dials for the dmg.control/v1 control plane (e.g.
+	// "wss://int.websocket-api.stepsecurity.io/v1"). Empty disables the
+	// control-plane goroutine entirely — the daemon then runs telemetry
+	// only. The URL is taken as-is; identification is by header on the
+	// upgrade, not by URL path.
+	WSEndpoint       string
+	SearchDirs       []string
+	EnableNPMScan    *bool  // nil=auto
+	EnableBrewScan   *bool  // nil=auto
+	EnablePythonScan *bool  // nil=auto
+	ColorMode        string // "" means auto
+	OutputFormat     string // "" means default (pretty)
+	HTMLOutputFile   string // "" means not set
+	LogLevel         string // "" means default (info); one of error/warn/info/debug
 )
 
 // ConfigFile is the JSON structure persisted to ~/.stepsecurity/config.json.
@@ -31,6 +38,7 @@ type ConfigFile struct {
 	APIEndpoint        string   `json:"api_endpoint,omitempty"`
 	APIKey             string   `json:"api_key,omitempty"`
 	ScanFrequencyHours string   `json:"scan_frequency_hours,omitempty"`
+	WSEndpoint         string   `json:"ws_endpoint,omitempty"`
 	SearchDirs         []string `json:"search_dirs,omitempty"`
 	EnableNPMScan      *bool    `json:"enable_npm_scan,omitempty"`
 	EnableBrewScan     *bool    `json:"enable_brew_scan,omitempty"`
@@ -76,6 +84,9 @@ func Load() {
 	}
 	if cfg.ScanFrequencyHours != "" && isPlaceholder(ScanFrequencyHours) {
 		ScanFrequencyHours = cfg.ScanFrequencyHours
+	}
+	if cfg.WSEndpoint != "" && WSEndpoint == "" {
+		WSEndpoint = cfg.WSEndpoint
 	}
 	if len(cfg.SearchDirs) > 0 {
 		SearchDirs = cfg.SearchDirs

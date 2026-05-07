@@ -53,12 +53,20 @@ const (
 )
 
 // Identity carries the device-level fields the daemon stamps onto the
-// hello frame. Construct once at daemon startup from internal/device
-// + internal/config; the wsclient never re-resolves these.
+// upgrade request and the hello frame. Construct once at daemon
+// startup from internal/device + internal/config; the wsclient never
+// re-resolves these.
+//
+// WSEndpoint is the absolute wss:// URL the daemon dials, taken
+// verbatim from `~/.stepsecurity/config.json`'s `ws_endpoint` field
+// (e.g. "wss://int.websocket-api.stepsecurity.io/v1"). API Gateway
+// WebSocket APIs do not route on URL path beyond the stage; the
+// customer + device identity is carried in custom headers and
+// validated by the backend's $connect handler.
 type Identity struct {
 	DeviceID     string
 	CustomerID   string
-	APIEndpoint  string // e.g. "https://int.api.stepsecurity.io"
+	WSEndpoint   string
 	APIKey       string
 	AgentVersion string // defaults to buildinfo.Version when empty
 	Platform     string // defaults to runtime.GOOS when empty
@@ -95,9 +103,9 @@ func Run(ctx context.Context, cfg Config) error {
 		cfg.Identity.Platform = runtime.GOOS
 	}
 
-	endpoint, err := buildEndpointURL(cfg.Identity)
+	endpoint, err := validateEndpoint(cfg.Identity)
 	if err != nil {
-		return fmt.Errorf("wsclient: build endpoint: %w", err)
+		return fmt.Errorf("wsclient: %w", err)
 	}
 
 	delay := backoffMin
@@ -136,9 +144,17 @@ func connectAndRun(parent context.Context, endpoint string, cfg Config) error {
 	dialCtx, cancel := context.WithTimeout(parent, HelloTimeout)
 	defer cancel()
 
+	// Custom headers carry the customer + device identity — API Gateway
+	// WS APIs don't route on URL paths, so identity is at the header
+	// layer. The backend's $connect handler validates Authorization
+	// against the customer's TenantAPIKey, then registers the
+	// connection_id under (customer_name, device_id).
 	hdr := http.Header{}
 	hdr.Set("Authorization", "Bearer "+cfg.Identity.APIKey)
-	hdr.Set("X-Agent-Version", cfg.Identity.AgentVersion)
+	hdr.Set("X-Stepsecurity-Customer-Name", cfg.Identity.CustomerID)
+	hdr.Set("X-Stepsecurity-Device-Id", cfg.Identity.DeviceID)
+	hdr.Set("X-Stepsecurity-Agent-Version", cfg.Identity.AgentVersion)
+	hdr.Set("X-Stepsecurity-Platform", cfg.Identity.Platform)
 	hdr.Set("User-Agent", "dmg/"+cfg.Identity.AgentVersion)
 
 	dialOpts := &websocket.DialOptions{
@@ -251,39 +267,35 @@ func writeResult(ctx context.Context, conn *websocket.Conn, res control.Result) 
 	return conn.Write(writeCtx, websocket.MessageText, body)
 }
 
-// buildEndpointURL converts the configured https:// API endpoint into
-// the wss:// control URL with the device + customer path components.
-// http:// becomes ws:// for local testing, but production endpoints
-// must be TLS.
-func buildEndpointURL(id Identity) (string, error) {
-	if id.APIEndpoint == "" {
-		return "", errors.New("empty api_endpoint")
+// validateEndpoint sanity-checks the absolute wss:// URL the caller
+// configured. The URL is taken verbatim — no path templating, no
+// scheme rewriting — because API Gateway WebSocket APIs route on
+// stage only, with all customer/device identity carried in headers.
+// Returns the trimmed URL for dial, or an error when required fields
+// are missing.
+func validateEndpoint(id Identity) (string, error) {
+	if id.WSEndpoint == "" {
+		return "", errors.New("empty ws_endpoint")
 	}
 	if id.CustomerID == "" || id.DeviceID == "" {
 		return "", errors.New("empty customer_id or device_id")
 	}
-	u, err := url.Parse(strings.TrimRight(id.APIEndpoint, "/"))
+	endpoint := strings.TrimRight(id.WSEndpoint, "/")
+	u, err := url.Parse(endpoint)
 	if err != nil {
-		return "", fmt.Errorf("parse api_endpoint: %w", err)
+		return "", fmt.Errorf("parse ws_endpoint: %w", err)
 	}
 	switch u.Scheme {
-	case "https":
-		u.Scheme = "wss"
-	case "http":
-		u.Scheme = "ws"
+	case "wss", "ws":
+		// Both accepted; "ws" is for local dev/testing only — production
+		// loaders write "wss". coder/websocket handles either.
 	default:
-		return "", fmt.Errorf("api_endpoint scheme %q not supported (need http or https)", u.Scheme)
+		return "", fmt.Errorf("ws_endpoint scheme %q not supported (need ws or wss)", u.Scheme)
 	}
-	// Set Path with unescaped values; clear RawPath so url.URL.String()
-	// encodes path segments correctly. Pre-escaping (url.PathEscape) and
-	// then assigning to Path causes double-encoding because Path is the
-	// canonical *unescaped* form.
-	u.Path = strings.TrimRight(u.Path, "/") +
-		"/v1/" + id.CustomerID +
-		"/devices/" + id.DeviceID +
-		"/control"
-	u.RawPath = ""
-	return u.String(), nil
+	if u.Host == "" {
+		return "", fmt.Errorf("ws_endpoint missing host: %q", endpoint)
+	}
+	return endpoint, nil
 }
 
 // nextBackoff doubles delay up to backoffMax. Plain exponential —

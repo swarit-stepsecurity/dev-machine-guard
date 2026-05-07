@@ -16,43 +16,43 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/progress"
 )
 
-func TestBuildEndpointURL(t *testing.T) {
+func TestValidateEndpoint(t *testing.T) {
 	cases := []struct {
 		name string
 		id   Identity
 		want string
 	}{
 		{
-			name: "https rewritten to wss",
+			name: "wss accepted as-is",
 			id: Identity{
-				APIEndpoint: "https://int.api.stepsecurity.io",
-				CustomerID:  "step-security",
-				DeviceID:    "C02XXX",
+				WSEndpoint: "wss://int.websocket-api.stepsecurity.io/v1",
+				CustomerID: "step-security",
+				DeviceID:   "C02XXX",
 			},
-			want: "wss://int.api.stepsecurity.io/v1/step-security/devices/C02XXX/control",
+			want: "wss://int.websocket-api.stepsecurity.io/v1",
 		},
 		{
-			name: "trailing slash on endpoint stripped",
+			name: "trailing slash stripped",
 			id: Identity{
-				APIEndpoint: "https://api.example.com/",
-				CustomerID:  "cust",
-				DeviceID:    "dev",
+				WSEndpoint: "wss://ws.example.com/v1/",
+				CustomerID: "cust",
+				DeviceID:   "dev",
 			},
-			want: "wss://api.example.com/v1/cust/devices/dev/control",
+			want: "wss://ws.example.com/v1",
 		},
 		{
-			name: "http rewritten to ws (test/dev only)",
+			name: "ws scheme accepted (test/dev)",
 			id: Identity{
-				APIEndpoint: "http://localhost:8080",
-				CustomerID:  "c",
-				DeviceID:    "d",
+				WSEndpoint: "ws://localhost:8080",
+				CustomerID: "c",
+				DeviceID:   "d",
 			},
-			want: "ws://localhost:8080/v1/c/devices/d/control",
+			want: "ws://localhost:8080",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := buildEndpointURL(tc.id)
+			got, err := validateEndpoint(tc.id)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -63,19 +63,20 @@ func TestBuildEndpointURL(t *testing.T) {
 	}
 }
 
-func TestBuildEndpointURL_Errors(t *testing.T) {
+func TestValidateEndpoint_Errors(t *testing.T) {
 	cases := []struct {
 		name string
 		id   Identity
 	}{
 		{"empty endpoint", Identity{CustomerID: "c", DeviceID: "d"}},
-		{"empty customer", Identity{APIEndpoint: "https://x.example", DeviceID: "d"}},
-		{"empty device", Identity{APIEndpoint: "https://x.example", CustomerID: "c"}},
-		{"unknown scheme", Identity{APIEndpoint: "ftp://x.example", CustomerID: "c", DeviceID: "d"}},
+		{"empty customer", Identity{WSEndpoint: "wss://x.example", DeviceID: "d"}},
+		{"empty device", Identity{WSEndpoint: "wss://x.example", CustomerID: "c"}},
+		{"unknown scheme", Identity{WSEndpoint: "https://x.example", CustomerID: "c", DeviceID: "d"}},
+		{"missing host", Identity{WSEndpoint: "wss://", CustomerID: "c", DeviceID: "d"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := buildEndpointURL(tc.id); err == nil {
+			if _, err := validateEndpoint(tc.id); err == nil {
 				t.Error("expected error")
 			}
 		})
@@ -214,7 +215,7 @@ func TestRun_RoundTrip(t *testing.T) {
 
 	cfg := Config{
 		Identity: Identity{
-			APIEndpoint:  ts.URL,
+			WSEndpoint:   httpToWS(ts.URL),
 			CustomerID:   "cust",
 			DeviceID:     "dev",
 			APIKey:       "k",
@@ -284,11 +285,12 @@ func TestRun_AuthHeaderSent(t *testing.T) {
 	reg := control.NewRegistry(nil)
 	cfg := Config{
 		Identity: Identity{
-			APIEndpoint:  srv.URL,
-			CustomerID:   "cust",
-			DeviceID:     "dev",
+			WSEndpoint:   httpToWS(srv.URL),
+			CustomerID:   "cust-1",
+			DeviceID:     "dev-X",
 			APIKey:       "shh-secret",
 			AgentVersion: "test",
+			Platform:     "linux",
 		},
 		Registry: reg,
 		Logger:   progress.NewLogger(progress.LevelError),
@@ -305,4 +307,78 @@ func TestRun_AuthHeaderSent(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("server never received upgrade")
 	}
+}
+
+// TestRun_IdentityHeadersSent confirms the upgrade carries the
+// customer/device identity headers — without these, the API Gateway
+// $connect handler can't route the connection to the right device row.
+func TestRun_IdentityHeadersSent(t *testing.T) {
+	type captured struct {
+		customer, device, version, platform string
+	}
+	got := make(chan captured, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- captured{
+			customer: r.Header.Get("X-Stepsecurity-Customer-Name"),
+			device:   r.Header.Get("X-Stepsecurity-Device-Id"),
+			version:  r.Header.Get("X-Stepsecurity-Agent-Version"),
+			platform: r.Header.Get("X-Stepsecurity-Platform"),
+		}
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		_, _, _ = c.Read(r.Context())
+		c.Close(websocket.StatusNormalClosure, "done")
+	}))
+	defer srv.Close()
+
+	reg := control.NewRegistry(nil)
+	cfg := Config{
+		Identity: Identity{
+			WSEndpoint:   httpToWS(srv.URL),
+			CustomerID:   "step-security",
+			DeviceID:     "C02XXX",
+			APIKey:       "k",
+			AgentVersion: "9.9.9",
+			Platform:     "linux",
+		},
+		Registry: reg,
+		Logger:   progress.NewLogger(progress.LevelError),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go Run(ctx, cfg)
+
+	select {
+	case h := <-got:
+		if h.customer != "step-security" {
+			t.Errorf("customer header = %q", h.customer)
+		}
+		if h.device != "C02XXX" {
+			t.Errorf("device header = %q", h.device)
+		}
+		if h.version != "9.9.9" {
+			t.Errorf("version header = %q", h.version)
+		}
+		if h.platform != "linux" {
+			t.Errorf("platform header = %q", h.platform)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server never received upgrade")
+	}
+}
+
+// httpToWS rewrites an httptest.NewServer URL ("http://...") to the
+// "ws://" scheme our validator now requires. httptest gives back HTTP;
+// the protocol upgrade still works on ws://, but our config layer no
+// longer accepts http:// to keep production callers honest.
+func httpToWS(httpURL string) string {
+	if strings.HasPrefix(httpURL, "https://") {
+		return "wss://" + strings.TrimPrefix(httpURL, "https://")
+	}
+	if strings.HasPrefix(httpURL, "http://") {
+		return "ws://" + strings.TrimPrefix(httpURL, "http://")
+	}
+	return httpURL
 }

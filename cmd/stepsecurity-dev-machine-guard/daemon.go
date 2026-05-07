@@ -61,36 +61,41 @@ func runDaemon(exec executor.Executor, log *progress.Logger, cfg *cli.Config) er
 	// the daemon's lifetime.
 	dev := device.Gather(ctx, exec)
 
-	wsCfg := wsclient.Config{
-		Identity: wsclient.Identity{
-			DeviceID:    dev.SerialNumber,
-			CustomerID:  config.CustomerID,
-			APIEndpoint: config.APIEndpoint,
-			APIKey:      config.APIKey,
-			Platform:    dev.Platform,
-		},
-		Registry: registry,
-		Logger:   log,
-	}
-
 	var wg sync.WaitGroup
 
-	// Telemetry loop.
+	// Telemetry loop — always runs; this is the existing behavior.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		runTelemetryLoop(ctx, exec, log, cfg, interval)
 	}()
 
-	// WS control client. Errors here are always ctx.Err() — wsclient
-	// owns its own retry forever and only returns on shutdown.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := wsclient.Run(ctx, wsCfg); err != nil && !errors.Is(err, context.Canceled) {
-			log.Error("control: wsclient.Run returned: %v", err)
+	// WS control client — only runs when ws_endpoint is configured.
+	// Empty value means the operator hasn't enrolled this device into
+	// the control plane yet, in which case we silently stay in
+	// telemetry-only mode.
+	if config.WSEndpoint != "" {
+		wsCfg := wsclient.Config{
+			Identity: wsclient.Identity{
+				DeviceID:   dev.SerialNumber,
+				CustomerID: config.CustomerID,
+				WSEndpoint: config.WSEndpoint,
+				APIKey:     config.APIKey,
+				Platform:   dev.Platform,
+			},
+			Registry: registry,
+			Logger:   log,
 		}
-	}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := wsclient.Run(ctx, wsCfg); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("control: wsclient.Run returned: %v", err)
+			}
+		}()
+	} else {
+		log.Progress("control plane disabled (ws_endpoint not configured)")
+	}
 
 	wg.Wait()
 	log.Progress("daemon exited")
