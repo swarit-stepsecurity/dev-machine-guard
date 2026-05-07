@@ -32,10 +32,19 @@ import (
 // Constants matching the API contract. Keep in lockstep with
 // .plans/control-plane-api-contract.md.
 const (
-	// ReadDeadline bounds idle time on the connection. The contract
-	// specifies 75s; the backend sends ping frames every 30s, so 75s
-	// gives us ~2.5 missed pings before forcing a reconnect.
+	// ReadDeadline bounds idle time on the connection. AWS API Gateway
+	// WebSocket APIs do NOT send ping frames on idle connections (and
+	// also enforce a 10-minute idle timeout that closes them silently).
+	// We therefore drive keep-alive from the client side: send a
+	// WS-level ping every PingInterval and use ReadDeadline as the
+	// outer cap, leaving headroom for one missed pong.
 	ReadDeadline = 75 * time.Second
+
+	// PingInterval is how often we send a WS-level ping. 30s is well
+	// inside API Gateway's 10-minute idle timeout AND inside our own
+	// ReadDeadline above. coder/websocket's Ping waits for the pong,
+	// so a successful Ping return refreshes our read activity.
+	PingInterval = 30 * time.Second
 
 	// MaxFrameBytes caps incoming frames at 1 MiB per the contract.
 	// coder/websocket enforces this via SetReadLimit.
@@ -177,12 +186,53 @@ func connectAndRun(parent context.Context, endpoint string, cfg Config) error {
 	}
 	cfg.Logger.Progress("control: connected (capabilities=%v)", cfg.Registry.Capabilities())
 
+	// Start a sibling goroutine that keeps the connection alive by
+	// sending WS-level pings on PingInterval. AWS API Gateway WS
+	// doesn't ping us, and silent idle timeouts (10 min) plus our own
+	// ReadDeadline (75s) would otherwise force a reconnect every few
+	// minutes — wasteful in Lambda invocations and DDB churn.
+	//
+	// connCtx scopes the pinger to this single connection: when
+	// readLoop returns and we hit the cancel below, the pinger exits.
+	connCtx, cancelConn := context.WithCancel(parent)
+	defer cancelConn()
+	go runPinger(connCtx, conn, cfg.Logger)
+
 	if err := readLoop(parent, conn, cfg); err != nil {
 		// readLoop already classifies — pass through, possibly nil if
 		// parent ctx was canceled during a graceful close.
 		return err
 	}
 	return nil
+}
+
+// runPinger fires a WS-level ping every PingInterval until ctx is
+// canceled or the ping fails. coder/websocket's Conn.Ping is safe to
+// call concurrently with Read/Write.
+//
+// On ping failure (timeout or transport error) the pinger closes the
+// connection. That unblocks the read loop with a closed-connection
+// error, which triggers reconnect. Without this, the read loop would
+// stay parked forever on a half-open socket — pings happen at the
+// protocol layer and don't surface to Read.
+func runPinger(ctx context.Context, conn *websocket.Conn, log *progress.Logger) {
+	ticker := time.NewTicker(PingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			err := conn.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				log.Debug("control: ping failed, closing connection: %v", err)
+				_ = conn.Close(websocket.StatusGoingAway, "ping failed")
+				return
+			}
+		}
+	}
 }
 
 // writeHello marshals and sends the hello frame.
@@ -206,14 +256,17 @@ func writeHello(ctx context.Context, conn *websocket.Conn, cfg Config) error {
 }
 
 // readLoop reads frames in a loop, dispatching each command and
-// writing back the result. Loop exits on any read error. Read deadline
-// is enforced by reading inside a context with a fresh timeout each
-// iteration — coder/websocket has no SetReadDeadline equivalent.
+// writing back the result. Loop exits on any read error.
+//
+// No per-iteration read deadline: WS-level pings/pongs are handled by
+// coder/websocket internally and never surface to Read, so a deadline
+// here would fire whenever the backend has nothing to push (the
+// common case). Liveness is enforced by the pinger goroutine, which
+// closes the connection on ping failure — Read then returns the
+// closed-connection error and the loop exits naturally.
 func readLoop(parent context.Context, conn *websocket.Conn, cfg Config) error {
 	for {
-		readCtx, cancel := context.WithTimeout(parent, ReadDeadline)
-		typ, body, err := conn.Read(readCtx)
-		cancel()
+		typ, body, err := conn.Read(parent)
 		if err != nil {
 			if parent.Err() != nil {
 				_ = conn.Close(websocket.StatusNormalClosure, "shutdown")
