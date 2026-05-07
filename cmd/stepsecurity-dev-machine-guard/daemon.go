@@ -5,11 +5,16 @@ import (
 	"errors"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/cli"
 	"github.com/step-security/dev-machine-guard/internal/config"
+	"github.com/step-security/dev-machine-guard/internal/control"
+	"github.com/step-security/dev-machine-guard/internal/control/handlers"
+	"github.com/step-security/dev-machine-guard/internal/control/wsclient"
+	"github.com/step-security/dev-machine-guard/internal/device"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/progress"
 	"github.com/step-security/dev-machine-guard/internal/telemetry"
@@ -17,12 +22,21 @@ import (
 
 // runDaemon is the entrypoint for `dmg daemon`, the long-running variant of
 // `send-telemetry` invoked by the systemd user service installed via
-// `install --long-running`. It runs telemetry once at startup so the dashboard
-// gets fresh data immediately, then loops on `config.ScanFrequencyHours`.
+// `install --long-running`.
 //
-// Errors from individual telemetry runs are logged but do not exit the loop —
-// systemd would just restart us, multiplying the same upstream failure into a
-// retry storm. Hard exit is reserved for unrecoverable setup problems.
+// The daemon is a supervisor of two independent goroutines that share the
+// same cancellation context:
+//
+//  1. telemetry loop — runs telemetry.Run at startup, then on the configured
+//     scan_frequency_hours interval. Failures are logged but never crash
+//     the loop (systemd would restart us into the same upstream failure).
+//  2. WebSocket control client — opens a persistent wss:// to the configured
+//     api_endpoint, dispatches incoming commands through a control.Registry
+//     populated with the hooks.install / hooks.uninstall handlers, replies
+//     with typed results. Reconnects with exponential backoff forever.
+//
+// First SIGTERM/SIGINT cancels both goroutines via the shared context;
+// the function returns once both have unwound.
 func runDaemon(exec executor.Executor, log *progress.Logger, cfg *cli.Config) error {
 	hours, _ := strconv.Atoi(config.ScanFrequencyHours)
 	if hours <= 0 {
@@ -35,11 +49,63 @@ func runDaemon(exec executor.Executor, log *progress.Logger, cfg *cli.Config) er
 
 	log.Progress("daemon starting (interval=%s)", interval)
 
+	// Build the control-plane registry with the feature handlers we
+	// want exposed to the backend. Adding a new on-demand capability
+	// is one Register call here.
+	registry := control.NewRegistry(nil)
+	registry.Register(handlers.NewHooksInstall(exec))
+	registry.Register(handlers.NewHooksUninstall(exec))
+
+	// Resolve the device identity once at startup. SerialNumber is the
+	// same string telemetry already uses; we never re-resolve it inside
+	// the daemon's lifetime.
+	dev := device.Gather(ctx, exec)
+
+	wsCfg := wsclient.Config{
+		Identity: wsclient.Identity{
+			DeviceID:    dev.SerialNumber,
+			CustomerID:  config.CustomerID,
+			APIEndpoint: config.APIEndpoint,
+			APIKey:      config.APIKey,
+			Platform:    dev.Platform,
+		},
+		Registry: registry,
+		Logger:   log,
+	}
+
+	var wg sync.WaitGroup
+
+	// Telemetry loop.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runTelemetryLoop(ctx, exec, log, cfg, interval)
+	}()
+
+	// WS control client. Errors here are always ctx.Err() — wsclient
+	// owns its own retry forever and only returns on shutdown.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := wsclient.Run(ctx, wsCfg); err != nil && !errors.Is(err, context.Canceled) {
+			log.Error("control: wsclient.Run returned: %v", err)
+		}
+	}()
+
+	wg.Wait()
+	log.Progress("daemon exited")
+	return nil
+}
+
+// runTelemetryLoop is the inner loop of the telemetry goroutine. Same
+// shape as before the WS client landed; pulled into its own function so
+// runDaemon stays focused on orchestration.
+func runTelemetryLoop(ctx context.Context, exec executor.Executor, log *progress.Logger, cfg *cli.Config, interval time.Duration) {
 	// Initial run.
 	if err := runOnce(ctx, exec, log, cfg); err != nil {
 		if errors.Is(err, context.Canceled) {
 			log.Progress("daemon stopped during initial telemetry run")
-			return nil
+			return
 		}
 		log.Error("initial telemetry failed: %v", err)
 	}
@@ -50,12 +116,12 @@ func runDaemon(exec executor.Executor, log *progress.Logger, cfg *cli.Config) er
 	for {
 		select {
 		case <-ctx.Done():
-			log.Progress("daemon received signal; exiting")
-			return nil
+			log.Progress("telemetry loop received signal; exiting")
+			return
 		case <-ticker.C:
 			if err := runOnce(ctx, exec, log, cfg); err != nil {
 				if errors.Is(err, context.Canceled) {
-					return nil
+					return
 				}
 				log.Error("telemetry cycle failed: %v", err)
 			}

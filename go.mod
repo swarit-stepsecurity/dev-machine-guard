@@ -13,4 +13,7 @@ require (
 	github.com/tidwall/sjson v1.2.5
 )
 
-require github.com/tidwall/match v1.1.1 // indirect
+require (
+	github.com/coder/websocket v1.8.14 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+)
