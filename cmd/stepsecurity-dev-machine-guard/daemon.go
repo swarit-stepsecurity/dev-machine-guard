@@ -55,6 +55,7 @@ func runDaemon(exec executor.Executor, log *progress.Logger, cfg *cli.Config) er
 	registry := control.NewRegistry(nil)
 	registry.Register(handlers.NewHooksInstall(exec))
 	registry.Register(handlers.NewHooksUninstall(exec))
+	registry.Register(handlers.NewPolicyUpdate(""))
 
 	// Resolve the device identity once at startup. SerialNumber is the
 	// same string telemetry already uses; we never re-resolve it inside
