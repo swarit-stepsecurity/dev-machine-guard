@@ -1,4 +1,14 @@
-package cli
+// Package errlog owns the per-user errors log
+// (~/.stepsecurity/ai-agent-hook-errors.jsonl) shared by every AI-agent
+// subsystem: the hooks install/uninstall handlers, the hot-path runtime,
+// and the new control-plane handlers. The log is best-effort and
+// fail-open — any failure to write is silently dropped so logging cannot
+// block the caller.
+//
+// This package was extracted from internal/aiagents/cli when the
+// install/uninstall orchestration moved into internal/aiagents/hooks; both
+// packages need the appender, so it lives one level up.
+package errlog
 
 import (
 	"encoding/json"
@@ -36,10 +46,22 @@ type ErrorEntry struct {
 }
 
 // errorLogPathOverride redirects writes to a test-controlled location.
-// "" means "use the default ~/.stepsecurity/<filename> path." Only
-// touched from same-package _test.go files; tests must restore on
-// cleanup since this is package-level mutable state.
+// "" means "use the default ~/.stepsecurity/<filename> path." Tests
+// across multiple packages need to flip this, so it is mutated only
+// through SetPathOverride / PathOverride; the variable itself stays
+// unexported. Tests must restore on cleanup since this is process-wide
+// state with no synchronization.
 var errorLogPathOverride string
+
+// SetPathOverride redirects the errors log to path. Pass "" to clear
+// the override and fall back to ~/.stepsecurity/<filename>. Test-only;
+// production code must not call this. Not goroutine-safe — tests using
+// it must not run in parallel.
+func SetPathOverride(path string) { errorLogPathOverride = path }
+
+// PathOverride returns the current override, or "" if none is set.
+// Pair with SetPathOverride to save/restore in test cleanup hooks.
+func PathOverride() string { return errorLogPathOverride }
 
 // AppendError writes a single JSONL entry to the errors log. The call
 // is best-effort: any failure (no $HOME, mkdir denied, marshal error,

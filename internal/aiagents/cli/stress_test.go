@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/step-security/dev-machine-guard/internal/aiagents/errlog"
 	aieventc "github.com/step-security/dev-machine-guard/internal/aiagents/event"
 )
 
@@ -106,7 +107,7 @@ func TestStress_ConcurrentHookInvocations(t *testing.T) {
 
 func assertErrorLogIsClean(t *testing.T) {
 	t.Helper()
-	path := errorLogPath()
+	path := errlog.ErrorLogPath()
 	if path == "" {
 		return
 	}

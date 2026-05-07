@@ -18,9 +18,11 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/aiagents/adapter"
 	"github.com/step-security/dev-machine-guard/internal/aiagents/adapter/claudecode"
 	"github.com/step-security/dev-machine-guard/internal/aiagents/adapter/codex"
+	"github.com/step-security/dev-machine-guard/internal/aiagents/errlog"
 	aieventc "github.com/step-security/dev-machine-guard/internal/aiagents/event"
 	"github.com/step-security/dev-machine-guard/internal/aiagents/hook"
 	"github.com/step-security/dev-machine-guard/internal/aiagents/ingest"
+	"github.com/step-security/dev-machine-guard/internal/aiagents/selfpath"
 	"github.com/step-security/dev-machine-guard/internal/config"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 )
@@ -68,7 +70,7 @@ func RunHook(stdin io.Reader, stdout, stderr io.Writer, args []string) int {
 	rt.Stdout = stdout
 	rt.Stderr = stderr
 	rt.Exec = executor.NewReal()
-	rt.LogError = AppendError
+	rt.LogError = errlog.AppendError
 	rt.UploadEvent = uploaderFactory()
 
 	// Bound the entire invocation by the same cap the runtime would
@@ -126,7 +128,7 @@ func adapterForHookAgent(agent string) adapter.Adapter {
 		// be reachable when one is added.
 		return nil
 	}
-	binaryPath, err := Resolve()
+	binaryPath, err := selfpath.Resolve()
 	if err != nil {
 		// Self-path resolution failed (e.g., /proc unavailable). The
 		// adapter only uses the binary path for ShellCommand outputs,

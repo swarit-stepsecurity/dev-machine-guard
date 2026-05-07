@@ -1,4 +1,4 @@
-package cli
+package hooks
 
 import (
 	"bytes"
@@ -10,9 +10,22 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/step-security/dev-machine-guard/internal/aiagents/errlog"
 	"github.com/step-security/dev-machine-guard/internal/config"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 )
+
+// withErrorLog redirects the errors log to a temp path for the test and
+// restores the previous value on cleanup. Tests using this helper must
+// not run in parallel — the override is package-level state in errlog.
+func withErrorLog(t *testing.T) string {
+	t.Helper()
+	tmp := filepath.Join(t.TempDir(), "errors.jsonl")
+	prev := errlog.PathOverride()
+	errlog.SetPathOverride(tmp)
+	t.Cleanup(func() { errlog.SetPathOverride(prev) })
+	return tmp
+}
 
 // withEnterpriseConfig stages valid (non-empty, non-placeholder) values
 // in the package-level config vars that ingest.Snapshot reads, restoring
@@ -59,21 +72,28 @@ func newInstallMock(t *testing.T, home string) *executor.Mock {
 	return m
 }
 
-func TestRunInstall_NoEnterpriseConfig_Exit1(t *testing.T) {
+// expectError asserts the call returned a non-nil *Error with the
+// expected code. Failure prints both the wanted and actual codes plus
+// the message body for debugging.
+func expectError(t *testing.T, herr *Error, want ErrorCode) {
+	t.Helper()
+	if herr == nil {
+		t.Fatalf("expected *Error with code %q, got nil", want)
+	}
+	if herr.Code != want {
+		t.Fatalf("error code = %q, want %q (message=%q)", herr.Code, want, herr.Message)
+	}
+}
+
+func TestInstall_NoEnterpriseConfig_ReturnsCode(t *testing.T) {
 	logPath := withErrorLog(t)
 	// Leave config vars as their default placeholders ({{...}}) — no
 	// withEnterpriseConfig call. ingest.Snapshot returns ok=false on
 	// placeholders.
-
-	var stdout, stderr bytes.Buffer
 	m := executor.NewMock()
-	rc := RunInstall(context.Background(), m, "", &stdout, &stderr)
-	if rc != 1 {
-		t.Fatalf("exit = %d, want 1", rc)
-	}
-	if !strings.Contains(stderr.String(), "Enterprise configuration not found") {
-		t.Errorf("stderr missing diagnostic, got: %q", stderr.String())
-	}
+	_, herr := Install(context.Background(), m, "")
+	expectError(t, herr, CodeEnterpriseConfigMissing)
+
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("expected errors log entry: %v", err)
@@ -83,11 +103,8 @@ func TestRunInstall_NoEnterpriseConfig_Exit1(t *testing.T) {
 	}
 }
 
-func TestRunInstall_PlaceholderConfig_Exit1(t *testing.T) {
+func TestInstall_PlaceholderConfig_ReturnsCode(t *testing.T) {
 	withErrorLog(t)
-	// Explicitly stage a placeholder in one field — the stricter gate
-	// must reject build-time placeholders even when the other two
-	// values look valid.
 	prevCID, prevEP, prevAK := config.CustomerID, config.APIEndpoint, config.APIKey
 	config.CustomerID = "cust-1"
 	config.APIEndpoint = "{{API_ENDPOINT}}"
@@ -98,14 +115,12 @@ func TestRunInstall_PlaceholderConfig_Exit1(t *testing.T) {
 		config.APIKey = prevAK
 	})
 
-	var stdout, stderr bytes.Buffer
 	m := executor.NewMock()
-	if rc := RunInstall(context.Background(), m, "", &stdout, &stderr); rc != 1 {
-		t.Fatalf("exit = %d, want 1", rc)
-	}
+	_, herr := Install(context.Background(), m, "")
+	expectError(t, herr, CodeEnterpriseConfigMissing)
 }
 
-func TestRunInstall_RootNoConsoleUser_Exit0(t *testing.T) {
+func TestInstall_RootNoConsoleUser_ReturnsCode(t *testing.T) {
 	withEnterpriseConfig(t)
 	logPath := withErrorLog(t)
 	withResolveBinary(t, okBinary)
@@ -116,15 +131,9 @@ func TestRunInstall_RootNoConsoleUser_Exit0(t *testing.T) {
 	m.SetUsername("root")
 	m.SetHomeDir("/var/root")
 
-	var stdout, stderr bytes.Buffer
-	rc := RunInstall(context.Background(), m, "", &stdout, &stderr)
-	if rc != 0 {
-		t.Fatalf("root + no console user: exit = %d, want 0", rc)
-	}
-	if !strings.Contains(stderr.String(), "no console user") {
-		t.Errorf("stderr missing the bail note, got: %q", stderr.String())
-	}
-	// errors.jsonl should record the bail.
+	_, herr := Install(context.Background(), m, "")
+	expectError(t, herr, CodeTargetUserUnresolved)
+
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("expected errlog entry on root-no-console-user: %v", err)
@@ -134,7 +143,7 @@ func TestRunInstall_RootNoConsoleUser_Exit0(t *testing.T) {
 	}
 }
 
-func TestRunInstall_SelfPathFails_Exit1(t *testing.T) {
+func TestInstall_SelfPathFails_ReturnsCode(t *testing.T) {
 	withEnterpriseConfig(t)
 	logPath := withErrorLog(t)
 	withResolveBinary(t, func() (string, error) {
@@ -144,19 +153,14 @@ func TestRunInstall_SelfPathFails_Exit1(t *testing.T) {
 	home := t.TempDir()
 	m := newInstallMock(t, home)
 
-	var stdout, stderr bytes.Buffer
-	if rc := RunInstall(context.Background(), m, "", &stdout, &stderr); rc != 1 {
-		t.Fatalf("exit = %d, want 1", rc)
-	}
-	if !strings.Contains(stderr.String(), "cannot resolve own binary path") {
-		t.Errorf("stderr missing diagnostic, got: %q", stderr.String())
-	}
+	_, herr := Install(context.Background(), m, "")
+	expectError(t, herr, CodeSelfPathFailed)
 	if data, _ := os.ReadFile(logPath); !strings.Contains(string(data), "selfpath_failed") {
 		t.Errorf("errlog missing selfpath_failed code, got: %q", string(data))
 	}
 }
 
-func TestRunInstall_UnsupportedAgent_Exit1(t *testing.T) {
+func TestInstall_UnsupportedAgent_ReturnsCode(t *testing.T) {
 	withEnterpriseConfig(t)
 	withErrorLog(t)
 	withResolveBinary(t, okBinary)
@@ -164,17 +168,16 @@ func TestRunInstall_UnsupportedAgent_Exit1(t *testing.T) {
 	home := t.TempDir()
 	m := newInstallMock(t, home)
 
-	var stdout, stderr bytes.Buffer
-	rc := RunInstall(context.Background(), m, "cursor", &stdout, &stderr)
-	if rc != 1 {
-		t.Fatalf("exit = %d, want 1", rc)
-	}
-	if !strings.Contains(stderr.String(), "unsupported agent") {
-		t.Errorf("stderr missing unsupported-agent diagnostic, got: %q", stderr.String())
+	_, herr := Install(context.Background(), m, "cursor")
+	expectError(t, herr, CodeUnsupportedAgent)
+	// The wrapped cause should mention the rejected name so callers
+	// rendering UX can surface it without re-parsing the code.
+	if cause := errors.Unwrap(herr); cause == nil || !strings.Contains(cause.Error(), "cursor") {
+		t.Errorf("expected wrapped cause to name the rejected agent, got: %v", cause)
 	}
 }
 
-func TestRunInstall_NoAgentsDetected_Exit0(t *testing.T) {
+func TestInstall_NoAgentsDetected_ReturnsEmpty(t *testing.T) {
 	withEnterpriseConfig(t)
 	withErrorLog(t)
 	withResolveBinary(t, okBinary)
@@ -182,24 +185,16 @@ func TestRunInstall_NoAgentsDetected_Exit0(t *testing.T) {
 	home := t.TempDir()
 	m := newInstallMock(t, home) // no SetPath, nothing detected
 
-	var stdout, stderr bytes.Buffer
-	rc := RunInstall(context.Background(), m, "", &stdout, &stderr)
-	if rc != 0 {
-		t.Fatalf("exit = %d, want 0 (no detection is not an error)", rc)
+	results, herr := Install(context.Background(), m, "")
+	if herr != nil {
+		t.Fatalf("herr = %v, want nil", herr)
 	}
-	out := stdout.String()
-	if !strings.Contains(out, "No supported AI coding agents detected") {
-		t.Errorf("stdout missing no-detected message, got: %q", out)
-	}
-	// User should learn about the --agent escape hatch and the agent
-	// names — without that they have no way to recover from a buggy
-	// detection result.
-	if !strings.Contains(out, "--agent") || !strings.Contains(out, "claude-code") || !strings.Contains(out, "codex") {
-		t.Errorf("stdout missing --agent escape-hatch hint, got: %q", out)
+	if len(results) != 0 {
+		t.Errorf("expected empty result slice, got %d entries: %+v", len(results), results)
 	}
 }
 
-func TestRunInstall_InstallsClaudeCode(t *testing.T) {
+func TestInstall_InstallsClaudeCode(t *testing.T) {
 	withEnterpriseConfig(t)
 	withErrorLog(t)
 	withResolveBinary(t, okBinary)
@@ -208,10 +203,15 @@ func TestRunInstall_InstallsClaudeCode(t *testing.T) {
 	m := newInstallMock(t, home)
 	m.SetPath("claude", "/usr/local/bin/claude")
 
-	var stdout, stderr bytes.Buffer
-	rc := RunInstall(context.Background(), m, "", &stdout, &stderr)
-	if rc != 0 {
-		t.Fatalf("exit = %d, want 0 (stderr=%q)", rc, stderr.String())
+	results, herr := Install(context.Background(), m, "")
+	if herr != nil {
+		t.Fatalf("herr = %v, want nil", herr)
+	}
+	if len(results) != 1 || results[0].Agent != "claude-code" || results[0].Status != StatusOK {
+		t.Fatalf("unexpected results: %+v", results)
+	}
+	if results[0].Install == nil || len(results[0].Install.HooksAdded) == 0 {
+		t.Errorf("expected Install with HooksAdded set: %+v", results[0])
 	}
 
 	settings := filepath.Join(home, ".claude", "settings.json")
@@ -225,20 +225,9 @@ func TestRunInstall_InstallsClaudeCode(t *testing.T) {
 	if !strings.Contains(string(data), fakeBinary+" _hook claude-code") {
 		t.Errorf("settings missing hook command, got: %s", string(data))
 	}
-
-	out := stdout.String()
-	if !strings.Contains(out, "claude-code:") {
-		t.Errorf("stdout missing claude-code header, got: %q", out)
-	}
-	if !strings.Contains(out, "added:") {
-		t.Errorf("stdout missing added hooks line, got: %q", out)
-	}
-	if !strings.Contains(out, "wrote:") {
-		t.Errorf("stdout missing wrote line, got: %q", out)
-	}
 }
 
-func TestRunInstall_InstallsBoth(t *testing.T) {
+func TestInstall_InstallsBoth(t *testing.T) {
 	withEnterpriseConfig(t)
 	withErrorLog(t)
 	withResolveBinary(t, okBinary)
@@ -248,10 +237,16 @@ func TestRunInstall_InstallsBoth(t *testing.T) {
 	m.SetPath("claude", "/usr/local/bin/claude")
 	m.SetPath("codex", "/usr/local/bin/codex")
 
-	var stdout, stderr bytes.Buffer
-	rc := RunInstall(context.Background(), m, "", &stdout, &stderr)
-	if rc != 0 {
-		t.Fatalf("exit = %d, want 0 (stderr=%q)", rc, stderr.String())
+	results, herr := Install(context.Background(), m, "")
+	if herr != nil {
+		t.Fatalf("herr = %v, want nil", herr)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d: %+v", len(results), results)
+	}
+	// Results follow SupportedAgents declaration order — claude-code first.
+	if results[0].Agent != "claude-code" || results[1].Agent != "codex" {
+		t.Errorf("unexpected ordering: %v, %v", results[0].Agent, results[1].Agent)
 	}
 
 	for _, p := range []string{
@@ -263,15 +258,9 @@ func TestRunInstall_InstallsBoth(t *testing.T) {
 			t.Errorf("expected file written: %s (err=%v)", p, err)
 		}
 	}
-
-	out := stdout.String()
-	// Per-adapter sections appear in declaration order: claude-code first.
-	if claudeIdx, codexIdx := strings.Index(out, "claude-code:"), strings.Index(out, "codex:"); claudeIdx == -1 || codexIdx == -1 || claudeIdx > codexIdx {
-		t.Errorf("expected claude-code section before codex; got: %q", out)
-	}
 }
 
-func TestRunInstall_ExplicitAgentSkipsDetection(t *testing.T) {
+func TestInstall_ExplicitAgentSkipsDetection(t *testing.T) {
 	withEnterpriseConfig(t)
 	withErrorLog(t)
 	withResolveBinary(t, okBinary)
@@ -280,10 +269,12 @@ func TestRunInstall_ExplicitAgentSkipsDetection(t *testing.T) {
 	// PATH is empty — but --agent codex is an unconditional opt-in.
 	m := newInstallMock(t, home)
 
-	var stdout, stderr bytes.Buffer
-	rc := RunInstall(context.Background(), m, "codex", &stdout, &stderr)
-	if rc != 0 {
-		t.Fatalf("exit = %d, want 0 (stderr=%q)", rc, stderr.String())
+	results, herr := Install(context.Background(), m, "codex")
+	if herr != nil {
+		t.Fatalf("herr = %v, want nil", herr)
+	}
+	if len(results) != 1 || results[0].Agent != "codex" || results[0].Status != StatusOK {
+		t.Fatalf("unexpected: %+v", results)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "hooks.json")); err != nil {
 		t.Errorf("expected codex hooks.json: %v", err)
@@ -294,7 +285,7 @@ func TestRunInstall_ExplicitAgentSkipsDetection(t *testing.T) {
 	}
 }
 
-func TestRunInstall_IdempotentReinstall(t *testing.T) {
+func TestInstall_IdempotentReinstall(t *testing.T) {
 	withEnterpriseConfig(t)
 	withErrorLog(t)
 	withResolveBinary(t, okBinary)
@@ -303,9 +294,8 @@ func TestRunInstall_IdempotentReinstall(t *testing.T) {
 	m := newInstallMock(t, home)
 	m.SetPath("claude", "/usr/local/bin/claude")
 
-	var out1 bytes.Buffer
-	if rc := RunInstall(context.Background(), m, "", &out1, &bytes.Buffer{}); rc != 0 {
-		t.Fatalf("first install exit = %d", rc)
+	if _, herr := Install(context.Background(), m, ""); herr != nil {
+		t.Fatalf("first install: %v", herr)
 	}
 
 	settings := filepath.Join(home, ".claude", "settings.json")
@@ -314,9 +304,9 @@ func TestRunInstall_IdempotentReinstall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var out2 bytes.Buffer
-	if rc := RunInstall(context.Background(), m, "", &out2, &bytes.Buffer{}); rc != 0 {
-		t.Fatalf("second install exit = %d", rc)
+	results, herr := Install(context.Background(), m, "")
+	if herr != nil {
+		t.Fatalf("second install: %v", herr)
 	}
 
 	second, err := os.ReadFile(settings)
@@ -330,21 +320,23 @@ func TestRunInstall_IdempotentReinstall(t *testing.T) {
 		t.Errorf("settings drifted between reinstalls:\n--- first ---\n%s\n--- second ---\n%s", string(first), string(second))
 	}
 
-	// Second run's stdout should report the entries as unchanged.
-	if !strings.Contains(out2.String(), "unchanged:") {
-		t.Errorf("second-install stdout missing 'unchanged:' line, got: %q", out2.String())
+	// Second run should report the entries as kept, not added.
+	if len(results) != 1 || results[0].Install == nil {
+		t.Fatalf("unexpected second-install result: %+v", results)
+	}
+	if len(results[0].Install.HooksAdded) != 0 || len(results[0].Install.HooksKept) == 0 {
+		t.Errorf("expected HooksKept on idempotent reinstall, got Added=%v Kept=%v",
+			results[0].Install.HooksAdded, results[0].Install.HooksKept)
 	}
 }
 
-// TestRunInstall_UsesTargetUserHomeNotProcessHome pins the wiring
-// between ResolveTargetUser and selectAdapters: the install must
-// target the resolved user's home, not the calling process's $HOME.
-// Plugging the mock home into a path that os.UserHomeDir would never
-// return is the cheapest way to verify which path actually got used.
-func TestRunInstall_UsesTargetUserHomeNotProcessHome(t *testing.T) {
+// TestInstall_UsesTargetUserHomeNotProcessHome pins the wiring between
+// resolveTargetUser and selectAdapters: the install must target the
+// resolved user's home, not the calling process's $HOME. Plugging the
+// mock home into a path that os.UserHomeDir would never return is the
+// cheapest way to verify which path actually got used.
+func TestInstall_UsesTargetUserHomeNotProcessHome(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		// The test home contains characters Windows accepts but the
-		// rest of the suite already covers Mac/Linux paths cleanly.
 		t.Skip("path-shape assertion is Unix-flavored")
 	}
 	withEnterpriseConfig(t)
@@ -358,9 +350,8 @@ func TestRunInstall_UsesTargetUserHomeNotProcessHome(t *testing.T) {
 	m := newInstallMock(t, home)
 	m.SetPath("claude", "/usr/local/bin/claude")
 
-	var stdout, stderr bytes.Buffer
-	if rc := RunInstall(context.Background(), m, "", &stdout, &stderr); rc != 0 {
-		t.Fatalf("exit = %d (stderr=%q)", rc, stderr.String())
+	if _, herr := Install(context.Background(), m, ""); herr != nil {
+		t.Fatalf("install: %v", herr)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); err != nil {
 		t.Errorf("install did not write under target-user home: %v", err)

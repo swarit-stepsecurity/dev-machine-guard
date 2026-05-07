@@ -1,4 +1,4 @@
-package cli
+package hooks
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/step-security/dev-machine-guard/internal/aiagents/errlog"
 	"github.com/step-security/dev-machine-guard/internal/executor"
 )
 
@@ -18,7 +19,7 @@ import (
 // covers both.
 //
 // Note: Mock's CurrentUser only carries Username + HomeDir — UID/GID are
-// not part of the public Mock API, so ResolveTargetUser's strconv.Atoi
+// not part of the public Mock API, so resolveTargetUser's strconv.Atoi
 // will yield 0 on the empty string. Tests that need a specific UID
 // drive the chown branch directly with TargetUser literals (see
 // TestChownToTarget_AsFakeRootSucceedsForOwnUID).
@@ -32,19 +33,15 @@ func TestResolveTargetUser_NonRoot_ReturnsCallingUser(t *testing.T) {
 	m.SetIsRoot(false)
 	withMockUser(m, "alice", "/Users/alice")
 
-	var stderr bytes.Buffer
-	got, ok := ResolveTargetUser(m, &stderr)
-	if !ok {
-		t.Fatal("expected ok=true for non-root caller")
+	got, herr := resolveTargetUser(m)
+	if herr != nil {
+		t.Fatalf("expected nil error for non-root caller, got %v", herr)
 	}
 	if got.User.Username != "alice" {
 		t.Errorf("Username = %q, want alice", got.User.Username)
 	}
 	if got.HomeDir != "/Users/alice" {
 		t.Errorf("HomeDir = %q, want /Users/alice", got.HomeDir)
-	}
-	if stderr.Len() != 0 {
-		t.Errorf("expected silent stderr on success, got %q", stderr.String())
 	}
 }
 
@@ -55,10 +52,9 @@ func TestResolveTargetUser_RootWithConsoleUser_ReturnsConsoleUser(t *testing.T) 
 	m.SetIsRoot(true)
 	withMockUser(m, "alice", "/Users/alice")
 
-	var stderr bytes.Buffer
-	got, ok := ResolveTargetUser(m, &stderr)
-	if !ok {
-		t.Fatal("expected ok=true when console user resolves to non-root")
+	got, herr := resolveTargetUser(m)
+	if herr != nil {
+		t.Fatalf("expected nil error when console user resolves to non-root, got %v", herr)
 	}
 	if got.User.Username != "alice" {
 		t.Errorf("Username = %q, want alice", got.User.Username)
@@ -67,9 +63,6 @@ func TestResolveTargetUser_RootWithConsoleUser_ReturnsConsoleUser(t *testing.T) 
 	// Errors log must not be touched on the success path.
 	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
 		t.Errorf("expected errors log not created on success, got err=%v", err)
-	}
-	if stderr.Len() != 0 {
-		t.Errorf("expected silent stderr on success, got %q", stderr.String())
 	}
 }
 
@@ -83,21 +76,14 @@ func TestResolveTargetUser_RootNoConsoleUser_BailsWithLog(t *testing.T) {
 	// resolve a console user under root.
 	withMockUser(m, "root", "/var/root")
 
-	var stderr bytes.Buffer
-	_, ok := ResolveTargetUser(m, &stderr)
-	if ok {
-		t.Fatal("expected ok=false when running as root with no console user")
-	}
-
-	if !strings.Contains(stderr.String(), "running as root with no console user") {
-		t.Errorf("stderr missing the expected one-line note: %q", stderr.String())
-	}
+	_, herr := resolveTargetUser(m)
+	expectError(t, herr, CodeTargetUserUnresolved)
 
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("expected errors log written: %v", err)
 	}
-	var entry ErrorEntry
+	var entry errlog.ErrorEntry
 	if err := json.Unmarshal(bytes.TrimRight(data, "\n"), &entry); err != nil {
 		t.Fatalf("unmarshal: %v (data=%q)", err, string(data))
 	}
@@ -107,23 +93,17 @@ func TestResolveTargetUser_RootNoConsoleUser_BailsWithLog(t *testing.T) {
 }
 
 func TestResolveTargetUser_RootEmptyUsername_AlsoBails(t *testing.T) {
-	withErrorLog(t) // capture log writes to temp
+	withErrorLog(t)
 
 	m := executor.NewMock()
 	m.SetIsRoot(true)
 	withMockUser(m, "", "")
 
-	var stderr bytes.Buffer
-	_, ok := ResolveTargetUser(m, &stderr)
-	if ok {
-		t.Fatal("expected ok=false for empty username under root")
-	}
-	if !strings.Contains(stderr.String(), "no console user") {
-		t.Errorf("stderr missing the bail note: %q", stderr.String())
-	}
+	_, herr := resolveTargetUser(m)
+	expectError(t, herr, CodeTargetUserUnresolved)
 }
 
-// ChownToTarget is a no-op when the caller is not root, because chowning
+// chownToTarget is a no-op when the caller is not root, because chowning
 // a file to a different UID requires CAP_CHOWN. Verify the early exit.
 func TestChownToTarget_NoOpWhenNotRoot(t *testing.T) {
 	withErrorLog(t)
@@ -138,7 +118,7 @@ func TestChownToTarget_NoOpWhenNotRoot(t *testing.T) {
 	m.SetIsRoot(false)
 
 	// Use a bogus UID/GID — if we accidentally tried to chown, this would fail.
-	ChownToTarget(m, []string{path}, TargetUser{UID: 9999, GID: 9999})
+	chownToTarget(m, []string{path}, TargetUser{UID: 9999, GID: 9999})
 
 	// File still exists and is readable.
 	if _, err := os.Stat(path); err != nil {
@@ -152,7 +132,7 @@ func TestChownToTarget_SkipsEmptyPaths(t *testing.T) {
 	m := executor.NewMock()
 	m.SetIsRoot(false) // no-op anyway, but proves the empty-string skip doesn't error
 
-	ChownToTarget(m, []string{"", "", ""}, TargetUser{})
+	chownToTarget(m, []string{"", "", ""}, TargetUser{})
 	// Reaching this line without a panic is the assertion.
 }
 
@@ -183,7 +163,7 @@ func TestChownToTarget_AsFakeRootSucceedsForOwnUID(t *testing.T) {
 	m := executor.NewMock()
 	m.SetIsRoot(true) // drive the chown branch
 
-	ChownToTarget(m, []string{path}, TargetUser{UID: uid, GID: gid})
+	chownToTarget(m, []string{path}, TargetUser{UID: uid, GID: gid})
 
 	// File should still exist with the same owner.
 	if _, err := os.Stat(path); err != nil {
@@ -215,7 +195,7 @@ func TestChownToTarget_FailureLogsButContinues(t *testing.T) {
 	m.SetIsRoot(true)
 
 	// Bogus UID — chown fails for non-privileged caller despite IsRoot=true.
-	ChownToTarget(m, []string{a, b}, TargetUser{UID: 1, GID: 1})
+	chownToTarget(m, []string{a, b}, TargetUser{UID: 1, GID: 1})
 
 	data, err := os.ReadFile(logPath)
 	if err != nil {

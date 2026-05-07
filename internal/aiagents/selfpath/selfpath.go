@@ -1,4 +1,9 @@
-package cli
+// Package selfpath returns the absolute, fully symlink-resolved path of
+// the currently-running DMG binary. Extracted from
+// internal/aiagents/cli when both the hooks orchestration package
+// (aiagents/hooks) and the hot-path runtime (aiagents/cli/hook.go) needed
+// to call it without dragging the cli package along.
+package selfpath
 
 import (
 	"fmt"
