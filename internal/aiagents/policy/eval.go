@@ -5,24 +5,96 @@ import (
 )
 
 // Request is what the runtime hands to Eval after parsing a hook payload.
-// All fields are optional except Ecosystem + CommandKind; missing data
-// tends toward Allow (fail-open).
+// All fields are optional; missing data tends toward Allow (fail-open).
+//
+// Two layers of fields:
+//
+//   - Generic-primitive inputs (ToolName, FilePath, URL, ShellCommand,
+//     CWD, HomeDir): consumed by the deny-list / allow-list matchers.
+//     These match against arbitrary tool calls — Bash, WebFetch, Read,
+//     Write, mcp__<server>__<tool>, etc. — not just package managers.
+//
+//   - Ecosystem-only inputs (Ecosystem through ConfigValue): consumed
+//     by the existing npm-family registry-pinning evaluator. Empty /
+//     unset Ecosystem skips that path.
+//
+// First-match precedence: generic primitives evaluate BEFORE the
+// ecosystem path. The first block wins; later checks short-circuit.
 type Request struct {
-	Ecosystem         Ecosystem         // resolved by EcosystemFor(parsed.Binary)
-	PackageManager    string            // raw binary observed: "npm" | "pnpm" | "yarn" | "bun" | "npx" | ...
-	CommandKind       string            // "install" | "config_set" | "config_delete" | "config_edit" | "exec" | ...
-	Registry          string            // resolved per cwd, e.g. "https://registry.npmjs.org/"
-	RegistryFlag      string            // value of --registry= if present on argv
-	UserconfigFlag    string            // value of --userconfig= if present on argv
-	InlineEnv         map[string]string // KEY=VAL prefix env vars on argv
-	ConfigKeyMutated  string            // for config_set/config_delete: which key
-	ConfigValue       string            // for config_set: the new value
+	// Generic-primitive inputs.
+	ToolName     string // canonical tool name from event.ToolName: "Bash", "WebFetch", "Read", "mcp__github__list_issues", …
+	FilePath     string // tool_input.file_path / .path / .filename, when present
+	URL          string // tool_input.url for WebFetch (matchHost extracts the host)
+	ShellCommand string // already-redacted shell command, for command-pattern matching
+	CWD          string // event.WorkingDirectory
+	HomeDir      string // for ~/ expansion in path / cwd patterns; runtime fills via os.UserHomeDir()
+
+	// Ecosystem-only inputs (existing npm-family registry pinning).
+	Ecosystem        Ecosystem         // resolved by EcosystemFor(parsed.Binary)
+	PackageManager   string            // raw binary observed: "npm" | "pnpm" | "yarn" | "bun" | "npx" | ...
+	CommandKind      string            // "install" | "config_set" | "config_delete" | "config_edit" | "exec" | ...
+	Registry         string            // resolved per cwd, e.g. "https://registry.npmjs.org/"
+	RegistryFlag     string            // value of --registry= if present on argv
+	UserconfigFlag   string            // value of --userconfig= if present on argv
+	InlineEnv        map[string]string // KEY=VAL prefix env vars on argv
+	ConfigKeyMutated string            // for config_set/config_delete: which key
+	ConfigValue      string            // for config_set: the new value
 }
 
-// Eval is a pure function over Policy + Request. The runtime persists the
-// returned Decision both on the JSONL event and (via the adapter) on the
-// stdout response.
+// Eval is a pure function over Policy + Request. The runtime persists
+// the returned Decision both on the JSONL event and (via the adapter)
+// on the stdout response.
+//
+// Order of evaluation (first block wins):
+//  1. Tool denylist           → CodeToolDenied
+//  2. Command pattern denylist → CodeCommandPatternDenied
+//  3. Path denylist           → CodePathDenied
+//  4. Host denylist           → CodeHostDenied
+//  5. MCP server denylist     → CodeMCPServerDenied
+//  6. CWD allowlist           → CodeCWDNotAllowed
+//  7. Existing ecosystem (registry pinning) → existing codes
 func Eval(p Policy, req Request) Decision {
+	if d, hit := evalGeneric(p, req); hit {
+		return d
+	}
+	return evalEcosystem(p, req)
+}
+
+// evalGeneric runs the per-primitive matchers against the request.
+// Returns (decision, true) on the first block; (zero, false) when
+// none of the primitives matched.
+func evalGeneric(p Policy, req Request) (Decision, bool) {
+	if matchTool(p.DenyTools, req.ToolName) {
+		return BlockDecision(CodeToolDenied,
+			"tool "+req.ToolName+" denied by policy"), true
+	}
+	if pat, ok := matchCommandPattern(p.DenyCommandPatterns, req.ShellCommand); ok {
+		return BlockDecision(CodeCommandPatternDenied,
+			"shell command matched denied pattern "+pat), true
+	}
+	if pat, ok := matchPath(p.DenyPaths, req.FilePath, req.HomeDir); ok {
+		return BlockDecision(CodePathDenied,
+			"file path "+req.FilePath+" matched denied pattern "+pat), true
+	}
+	if pat, ok := matchHost(p.DenyHosts, req.URL); ok {
+		return BlockDecision(CodeHostDenied,
+			"URL host matched denied pattern "+pat), true
+	}
+	if server, ok := matchMCPServer(p.DenyMCPServers, req.ToolName); ok {
+		return BlockDecision(CodeMCPServerDenied,
+			"MCP server "+server+" denied by policy"), true
+	}
+	if summary, allowed := matchCWDAllowlist(p.AllowCWDs, req.CWD, req.HomeDir); !allowed {
+		return BlockDecision(CodeCWDNotAllowed,
+			"working directory not in allowlist ("+summary+")"), true
+	}
+	return Decision{}, false
+}
+
+// evalEcosystem is the existing npm-family registry pinning path.
+// Returns Allow when no ecosystem is recognized — preserving the
+// pre-extension behavior for non-shell or non-npm tool calls.
+func evalEcosystem(p Policy, req Request) Decision {
 	block, ok := p.Ecosystems[req.Ecosystem]
 	if !ok || !block.Enabled {
 		return AllowDecision(CodePolicyDisabled, "policy disabled for ecosystem "+string(req.Ecosystem))

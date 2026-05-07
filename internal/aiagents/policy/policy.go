@@ -30,13 +30,29 @@ const (
 	ModeBlock Mode = "block"
 )
 
-// Policy is the active policy document. Per-ecosystem enforcement lives
-// under Ecosystems; a missing or disabled block means the runtime allows
-// that ecosystem unconditionally and emits no policy_decision.
+// Policy is the active policy document. Generic primitives
+// (DenyTools, DenyPaths, …) evaluate before per-ecosystem registry
+// pinning; first match wins.
+//
+// Wire shape doubles as the file shape under
+// ~/.stepsecurity/hook-policy.json (cache populated by the daemon's
+// policy.update WS handler) so the same struct serializes both ways.
 type Policy struct {
-	Version    int                           `json:"version"`
-	Mode       Mode                          `json:"mode,omitempty"`
-	Ecosystems map[Ecosystem]EcosystemPolicy `json:"ecosystems"`
+	Version int  `json:"version"`
+	Mode    Mode `json:"mode,omitempty"` // audit | block
+
+	// Generic primitives. Each is independently optional; an empty
+	// slice means "no rule" for that primitive (skip).
+	DenyTools           []string `json:"deny_tools,omitempty"`            // case-insensitive exact match on event.ToolName
+	DenyCommandPatterns []string `json:"deny_command_patterns,omitempty"` // substring match on the redacted shell command
+	DenyPaths           []string `json:"deny_paths,omitempty"`            // glob match on tool_input.file_path / path
+	DenyHosts           []string `json:"deny_hosts,omitempty"`            // hostname denylist (exact, or "*.example.com" wildcard) for WebFetch URLs
+	DenyMCPServers      []string `json:"deny_mcp_servers,omitempty"`      // exact match on the <server> in mcp__<server>__<tool>
+	AllowCWDs           []string `json:"allow_cwds,omitempty"`            // when non-empty, ONLY tool calls with WorkingDirectory under one of these prefixes are allowed
+
+	// Existing — per-ecosystem registry pinning. Evaluated last
+	// (only when none of the above triggered a block).
+	Ecosystems map[Ecosystem]EcosystemPolicy `json:"ecosystems,omitempty"`
 }
 
 // ResolveMode returns p.Mode if it is a known value; otherwise ModeAudit.

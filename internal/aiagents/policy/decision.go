@@ -6,16 +6,27 @@ package policy
 type DecisionCode string
 
 const (
-	CodeAllowed             DecisionCode = "allowed"
-	CodeRegistryNotAllowed  DecisionCode = "registry_not_allowed"
-	CodeRegistryFlag        DecisionCode = "registry_flag_override"
-	CodeRegistryEnv         DecisionCode = "registry_env_override"
-	CodeUserconfigFlag      DecisionCode = "userconfig_override"
-	CodeManagedKeyMutation  DecisionCode = "managed_key_mutation"
-	CodeManagedKeyEdit      DecisionCode = "managed_key_edit"
-	CodeInsufficientData    DecisionCode = "insufficient_data"
-	CodePolicyDisabled      DecisionCode = "policy_disabled"
-	CodeNotInstallCommand   DecisionCode = "not_install_command"
+	// Existing — npm-family registry-pinning verdicts.
+	CodeAllowed            DecisionCode = "allowed"
+	CodeRegistryNotAllowed DecisionCode = "registry_not_allowed"
+	CodeRegistryFlag       DecisionCode = "registry_flag_override"
+	CodeRegistryEnv        DecisionCode = "registry_env_override"
+	CodeUserconfigFlag     DecisionCode = "userconfig_override"
+	CodeManagedKeyMutation DecisionCode = "managed_key_mutation"
+	CodeManagedKeyEdit     DecisionCode = "managed_key_edit"
+	CodeInsufficientData   DecisionCode = "insufficient_data"
+	CodePolicyDisabled     DecisionCode = "policy_disabled"
+	CodeNotInstallCommand  DecisionCode = "not_install_command"
+
+	// New — generic primitives evaluated before the registry path.
+	// Each fires from a corresponding deny-list / allow-list field on
+	// the Policy struct (see policy.go).
+	CodeToolDenied            DecisionCode = "tool_denied"
+	CodeCommandPatternDenied  DecisionCode = "command_pattern_denied"
+	CodePathDenied            DecisionCode = "path_denied"
+	CodeHostDenied            DecisionCode = "host_denied"
+	CodeMCPServerDenied       DecisionCode = "mcp_server_denied"
+	CodeCWDNotAllowed         DecisionCode = "cwd_not_allowed"
 )
 
 // GenericBlockMessage is the literal phrase shown to the agent on any
