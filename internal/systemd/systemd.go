@@ -110,6 +110,15 @@ func installLongRunning(ctx context.Context, exec executor.Executor, log *progre
 		return err
 	}
 
+	// Enable linger before enabling the service. Without linger, the
+	// user systemd manager terminates user units when the user's last
+	// login session ends — which on a developer laptop happens every
+	// time they log out, and on an MDM-deployed box happens whenever
+	// the install SSH session exits. Best-effort: install proceeds
+	// even if linger can't be enabled (we log a clear warning so the
+	// operator knows to set it manually).
+	enableLinger(ctx, exec, log)
+
 	_, stderr, exitCode, err := exec.Run(ctx, "systemctl", "--user", "enable", "--now", unitName+".service")
 	if err != nil {
 		return fmt.Errorf("failed to enable service: %w", err)
@@ -125,6 +134,65 @@ func installLongRunning(ctx context.Context, exec executor.Executor, log *progre
 	log.Progress("The agent is now running as a persistent service (experimental --long-running)")
 
 	return nil
+}
+
+// enableLinger asks systemd-logind to keep this user's services
+// running across login-session boundaries. Required for the
+// long-running daemon — without it, the user systemd manager exits
+// when the last session ends, taking the daemon with it.
+//
+// The call only succeeds when invoked as root or when polkit grants
+// the user the `set-user-linger` action (typical for active console
+// users on stock distros). On failure we log a clear remediation
+// hint and continue: the install path stays usable, the daemon just
+// won't survive logout until the user fixes it manually.
+func enableLinger(ctx context.Context, exec executor.Executor, log *progress.Logger) {
+	username := lingerTargetUser(exec)
+	if username == "" {
+		log.Warn("could not resolve target user for linger; run `loginctl enable-linger <user>` manually if the daemon stops on logout")
+		return
+	}
+	if alreadyLingering(ctx, exec, username) {
+		log.Progress("  Linger already enabled for %s", username)
+		return
+	}
+	_, stderr, exitCode, err := exec.Run(ctx, "loginctl", "enable-linger", username)
+	if err != nil {
+		log.Warn("could not enable linger for %s: %v; run `sudo loginctl enable-linger %s` manually", username, err, username)
+		return
+	}
+	if exitCode != 0 {
+		log.Warn("could not enable linger for %s (exit %d): %s; run `sudo loginctl enable-linger %s` manually", username, exitCode, strings.TrimSpace(stderr), username)
+		return
+	}
+	log.Progress("  Enabled linger for %s (daemon will survive logout)", username)
+}
+
+// lingerTargetUser picks the username to enable linger for. When the
+// install runs as root (typical MDM deploy via the loader script),
+// we want the actual console user — installing the daemon under
+// root's home would defeat the whole point. When the install runs as
+// the user themselves, we want their own username.
+func lingerTargetUser(exec executor.Executor) string {
+	if u, err := exec.LoggedInUser(); err == nil && u != nil && u.Username != "" {
+		return u.Username
+	}
+	if u, err := exec.CurrentUser(); err == nil && u != nil && u.Username != "" {
+		return u.Username
+	}
+	return ""
+}
+
+// alreadyLingering avoids a redundant enable-linger call (and its
+// extra log line) when linger is already on. `loginctl show-user`
+// emits `Linger=yes` / `Linger=no` regardless of whether the call
+// is privileged, so this check is safe to make as either user.
+func alreadyLingering(ctx context.Context, exec executor.Executor, username string) bool {
+	stdout, _, _, err := exec.Run(ctx, "loginctl", "show-user", username, "--property=Linger")
+	if err != nil {
+		return false
+	}
+	return strings.Contains(stdout, "Linger=yes")
 }
 
 func daemonReload(ctx context.Context, exec executor.Executor) error {
