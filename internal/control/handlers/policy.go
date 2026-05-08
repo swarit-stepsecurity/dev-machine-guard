@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/step-security/dev-machine-guard/internal/aiagents/atomicfile"
@@ -18,9 +17,9 @@ import (
 // breaks the wire contract.
 const CmdPolicyUpdate = "policy.update"
 
-// policyCacheFileName is the on-disk cache the _hook runtime reads
-// from. Lives under ~/.stepsecurity alongside config.json.
-const policyCacheFileName = "hook-policy.json"
+// policyCacheFileName aliases policy.CacheFileName so the handler and
+// the runtime loader can never drift apart.
+const policyCacheFileName = policy.CacheFileName
 
 // policyUpdateArgs is the args shape pushed by agent-api's
 // dispatchHookPolicyChanges. `Scope` is informational ("device" today)
@@ -111,14 +110,11 @@ func (h *PolicyUpdate) Execute(ctx context.Context, args json.RawMessage) (any, 
 }
 
 // resolveCacheDir returns h.cacheDir if non-empty (test seam), else
-// the user's ~/.stepsecurity directory.
+// policy.CacheDir() so the handler and the loader agree on the
+// canonical location.
 func (h *PolicyUpdate) resolveCacheDir() (string, error) {
 	if h.cacheDir != "" {
 		return h.cacheDir, nil
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".stepsecurity"), nil
+	return policy.CacheDir()
 }

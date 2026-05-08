@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/step-security/dev-machine-guard/internal/aiagents/adapter"
+	"github.com/step-security/dev-machine-guard/internal/aiagents/errlog"
 	"github.com/step-security/dev-machine-guard/internal/aiagents/event"
 	"github.com/step-security/dev-machine-guard/internal/aiagents/policy"
 )
@@ -55,7 +56,15 @@ func shouldEvaluatePolicy(ev *event.Event, _ string) bool {
 func (rt *Runtime) evaluatePolicy(_ context.Context, ev *event.Event, cmd string) (*event.PolicyDecisionInfo, adapter.Decision) {
 	allow := adapter.AllowDecision()
 
-	pol := policy.Builtin()
+	// Load prefers ~/.stepsecurity/hook-policy.json (populated by the
+	// daemon's policy.update handler) and falls back to the embedded
+	// baseline when the cache is missing or corrupt. A non-nil error
+	// here means the file existed but couldn't be parsed — log it via
+	// errlog so the operator notices, but continue with Builtin().
+	pol, loadErr := policy.Load()
+	if loadErr != nil {
+		errlog.AppendError("policy_cache_load", "load_failed", loadErr.Error(), "")
+	}
 	if rt.Policy != nil {
 		pol = *rt.Policy
 	}
