@@ -524,15 +524,15 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 
 	// Build payload
 	payload := &Payload{
-		CustomerID:   config.CustomerID,
-		DeviceID:     dev.SerialNumber,
-		SerialNumber: dev.SerialNumber,
-		UserIdentity: dev.UserIdentity,
-		Hostname:     dev.Hostname,
-		Platform:     dev.Platform,
-		OSVersion:    dev.OSVersion,
-		AgentVersion: buildinfo.Version,
-		CollectedAt:  endTime.Unix(),
+		CustomerID:     config.CustomerID,
+		DeviceID:       dev.SerialNumber,
+		SerialNumber:   dev.SerialNumber,
+		UserIdentity:   dev.UserIdentity,
+		Hostname:       dev.Hostname,
+		Platform:       dev.Platform,
+		OSVersion:      dev.OSVersion,
+		AgentVersion:   buildinfo.Version,
+		CollectedAt:    endTime.Unix(),
 		NoUserLoggedIn: noUserLoggedIn,
 
 		IDEExtensions:        extensions,
