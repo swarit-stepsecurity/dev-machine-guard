@@ -13,10 +13,10 @@ import (
 )
 
 type agentSpec struct {
-	Name     string
-	Vendor   string
+	Name       string
+	Vendor     string
 	ConfigDirs []string // candidate config directories (relative to home or absolute, ~ expanded). Used as ConfigDir when populated alongside a discovered binary; never used as the sole proof of installation.
-	Binaries []string // binary names to search via LookPath, or home-relative paths (~/...). At least one must resolve before the agent is considered installed.
+	Binaries   []string // binary names to search via LookPath, or home-relative paths (~/...). At least one must resolve before the agent is considered installed.
 }
 
 var agentDefinitions = []agentSpec{

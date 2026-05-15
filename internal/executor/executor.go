@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -59,10 +60,23 @@ type Executor interface {
 	LoggedInUser() (*user.User, error)
 	// GOOS returns the runtime operating system.
 	GOOS() string
+	// IsAppleCLTStub reports whether binPath is an Apple Command Line Tools
+	// shim (under /usr/bin/) that would trigger the macOS "install developer
+	// tools" GUI prompt when invoked. Returns false on non-darwin systems, for
+	// paths outside /usr/bin/, or when CLT is installed. Detectors must guard
+	// every Run/RunWithTimeout on /usr/bin/-resolved binaries with this check
+	// to avoid disrupting end users on machines without CLT installed.
+	IsAppleCLTStub(ctx context.Context, binPath string) bool
+	// DiskCapacityBytes returns the total bytes on the filesystem containing
+	// path. Returns 0 on any error (lookup failures shouldn't block a scan).
+	DiskCapacityBytes(path string) uint64
 }
 
 // Real implements Executor using actual OS calls.
-type Real struct{}
+type Real struct {
+	cltOnce    sync.Once
+	cltPresent bool
+}
 
 func NewReal() *Real { return &Real{} }
 
@@ -175,23 +189,32 @@ func (r *Real) LoggedInUser() (*user.User, error) {
 		return r.CurrentUser()
 	}
 
-	// On macOS running as root, detect the console user.
-	// This mirrors the bash script's get_logged_in_user_info() which uses
-	// stat -f%Su /dev/console to find who is actually logged in.
+	// On macOS running as root, detect the console user via
+	// stat -f%Su /dev/console (mirrors the bash script's
+	// get_logged_in_user_info()).
+	//
+	// When the lookup can't yield a real GUI user — stat errored, console
+	// is owned by root or _windowserver, or the resolved name doesn't
+	// exist in Directory Services — we must NOT fall back to
+	// r.CurrentUser(). Under a LaunchDaemon that returns the root user
+	// with err == nil, callers treat that as "root is the developer", and
+	// the telemetry pipeline ships user_identity="root" with
+	// no_user_logged_in=false (issue #63). Surface the absence as an
+	// error so callers can flag the run as no-user instead.
 	ctx := context.Background()
 	stdout, _, _, err := r.Run(ctx, "stat", "-f%Su", "/dev/console")
 	if err != nil {
-		return r.CurrentUser()
+		return nil, fmt.Errorf("stat /dev/console failed: %w", err)
 	}
 
 	username := strings.TrimSpace(stdout)
 	if username == "" || username == "root" || username == "_windowserver" {
-		return r.CurrentUser()
+		return nil, fmt.Errorf("no GUI console user (owner=%q)", username)
 	}
 
 	u, err := user.Lookup(username)
 	if err != nil {
-		return r.CurrentUser()
+		return nil, fmt.Errorf("console user %q not in directory services: %w", username, err)
 	}
 
 	return u, nil
@@ -199,4 +222,54 @@ func (r *Real) LoggedInUser() (*user.User, error) {
 
 func (r *Real) GOOS() string {
 	return runtime.GOOS
+}
+
+// appleCLTStubBinaries is the explicit set of /usr/bin/ paths that Apple
+// ships as Command Line Tools shims. Invoking any of these on a Mac without
+// CLT installed pops a GUI install prompt. A "/usr/bin/" prefix check alone
+// would over-match: /usr/bin/ssh, /usr/bin/ls, /usr/bin/env etc. are base
+// system binaries that work fine without CLT.
+//
+// Extend this set when introducing a detector that invokes another /usr/bin/
+// binary Apple wraps as a CLT shim (common examples: git, make, clang,
+// clang++, cc, c++, gcc, g++, swift, swiftc, gdb, lldb).
+var appleCLTStubBinaries = map[string]struct{}{
+	"/usr/bin/python3": {},
+	"/usr/bin/pip3":    {},
+}
+
+// IsAppleCLTStub reports whether binPath is an Apple Command Line Tools shim
+// that would trigger the macOS "install developer tools" GUI prompt when
+// invoked. Returns true iff:
+//  1. GOOS is darwin,
+//  2. binPath is a known Apple CLT shim (see appleCLTStubBinaries), AND
+//  3. Xcode Command Line Tools are not installed (`xcode-select -p` fails).
+//
+// The CLT-presence result is cached per Real instance via sync.Once. The
+// probe deliberately uses context.Background() (with its own 5 s timeout)
+// rather than the caller-provided ctx: sync.Once consumes the slot on the
+// first call, so a caller arriving with a canceled or near-deadline ctx
+// could otherwise poison the cache with cltPresent=false and make every
+// subsequent check treat real binaries as stubs. The caller's ctx is
+// retained in the signature for symmetry with the Executor interface.
+//
+// `xcode-select -p` itself does NOT trigger the install prompt — it just
+// prints the developer-dir path or exits non-zero when CLT is absent.
+func (r *Real) IsAppleCLTStub(_ context.Context, binPath string) bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	if _, ok := appleCLTStubBinaries[binPath]; !ok {
+		return false
+	}
+	r.cltOnce.Do(func() {
+		probeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(probeCtx, "xcode-select", "-p")
+		var stdout bytes.Buffer
+		cmd.Stdout = &stdout
+		err := cmd.Run()
+		r.cltPresent = err == nil && strings.TrimSpace(stdout.String()) != ""
+	})
+	return !r.cltPresent
 }

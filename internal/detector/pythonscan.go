@@ -43,6 +43,11 @@ func (s *PythonScanner) ScanGlobalPackages(ctx context.Context) []model.PythonSc
 		if err != nil {
 			continue
 		}
+		if s.exec.IsAppleCLTStub(ctx, binPath) {
+			// On a Mac without Command Line Tools, /usr/bin/pip3 etc. are install-
+			// prompt shims — invoking `list` would pop a GUI dialog for the user.
+			continue
+		}
 
 		s.log.Progress("  Checking %s global packages...", spec.name)
 		version := s.getVersion(ctx, spec.binary, spec.versionCmd)

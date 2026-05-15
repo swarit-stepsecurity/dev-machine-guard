@@ -275,6 +275,64 @@ func TestPythonProjectDetector_VenvWithoutPip(t *testing.T) {
 	}
 }
 
+// Without Xcode Command Line Tools, /usr/bin/python3 and /usr/bin/pip3 are
+// Apple shims that pop a GUI install prompt the moment they're invoked. The
+// detector must skip them so customers rolling out the agent fleet-wide don't
+// see "install developer tools" dialogs on Macs without Python.
+func TestPythonPMDetector_SkipsAppleStubWithoutCLT(t *testing.T) {
+	mock := executor.NewMock()
+	mock.SetGOOS("darwin")
+	mock.SetAppleCLTInstalled(false)
+	mock.SetPath("python3", "/usr/bin/python3")
+	mock.SetPath("pip3", "/usr/bin/pip3")
+	// Intentionally NO SetCommand stubs — if the guard fails, the mock will
+	// return "no command stub" errors, but more importantly the test asserts
+	// these shims are never invoked.
+
+	det := NewPythonPMDetector(mock)
+	results := det.DetectManagers(context.Background())
+	if len(results) != 0 {
+		t.Errorf("expected /usr/bin/ stubs to be skipped, got %d results: %+v", len(results), results)
+	}
+
+	pkgs := det.ListPackages(context.Background())
+	if pkgs != nil {
+		t.Errorf("expected ListPackages to return nil when pip3 is an Apple stub, got %+v", pkgs)
+	}
+}
+
+// When CLT is installed, /usr/bin/python3 resolves to the real CLT-shipped
+// Python and must be detected as normal.
+func TestPythonPMDetector_DetectsUsrBinWhenCLTInstalled(t *testing.T) {
+	mock := executor.NewMock()
+	mock.SetGOOS("darwin")
+	mock.SetAppleCLTInstalled(true)
+	mock.SetPath("python3", "/usr/bin/python3")
+	mock.SetCommand("Python 3.9.6\n", "", 0, "python3", "--version")
+
+	det := NewPythonPMDetector(mock)
+	results := det.DetectManagers(context.Background())
+	if len(results) != 1 || results[0].Name != "python3" || results[0].Version != "3.9.6" {
+		t.Errorf("expected python3 v3.9.6 from /usr/bin/python3 with CLT, got %+v", results)
+	}
+}
+
+// The stub guard is a darwin-only concern; on Linux a binary at /usr/bin/python3
+// is a real interpreter and must be detected.
+func TestPythonPMDetector_DetectsUsrBinOnLinux(t *testing.T) {
+	mock := executor.NewMock()
+	mock.SetGOOS("linux")
+	mock.SetAppleCLTInstalled(false) // irrelevant on linux; verify it doesn't gate
+	mock.SetPath("python3", "/usr/bin/python3")
+	mock.SetCommand("Python 3.11.4\n", "", 0, "python3", "--version")
+
+	det := NewPythonPMDetector(mock)
+	results := det.DetectManagers(context.Background())
+	if len(results) != 1 || results[0].Version != "3.11.4" {
+		t.Errorf("expected python3 v3.11.4 on linux regardless of CLT flag, got %+v", results)
+	}
+}
+
 func mustCreateFile(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

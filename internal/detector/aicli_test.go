@@ -295,8 +295,8 @@ func TestNodeModulesPackageRoot(t *testing.T) {
 		{"/usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe", "/usr/local/lib/node_modules/@anthropic-ai/claude-code"},
 		{"/usr/local/lib/node_modules/@openai/codex/bin/codex.js", "/usr/local/lib/node_modules/@openai/codex"},
 		{"/home/u/.npm-global/lib/node_modules/opencode/bin/opencode", "/home/u/.npm-global/lib/node_modules/opencode"},
-		{"/usr/bin/ollama", ""},                                // not a node_modules path
-		{"/Users/u/Library/foo/node_modules", ""},              // node_modules with no package after
+		{"/usr/bin/ollama", ""},                   // not a node_modules path
+		{"/Users/u/Library/foo/node_modules", ""}, // node_modules with no package after
 		{"", ""},
 	}
 	for _, tt := range tests {

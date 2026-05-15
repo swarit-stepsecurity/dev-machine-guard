@@ -32,16 +32,17 @@ var s3UploadBackoffUnit = 2 * time.Second
 
 // Payload is the enterprise telemetry JSON structure.
 type Payload struct {
-	CustomerID     string `json:"customer_id"`
-	DeviceID       string `json:"device_id"`
-	SerialNumber   string `json:"serial_number"`
-	UserIdentity   string `json:"user_identity"`
-	Hostname       string `json:"hostname"`
-	Platform       string `json:"platform"`
-	OSVersion      string `json:"os_version"`
-	AgentVersion   string `json:"agent_version"`
-	CollectedAt    int64  `json:"collected_at"`
-	NoUserLoggedIn bool   `json:"no_user_logged_in"`
+	CustomerID     string                 `json:"customer_id"`
+	DeviceID       string                 `json:"device_id"`
+	SerialNumber   string                 `json:"serial_number"`
+	UserIdentity   string                 `json:"user_identity"`
+	Hostname       string                 `json:"hostname"`
+	Platform       string                 `json:"platform"`
+	OSVersion      string                 `json:"os_version"`
+	Resources      model.MachineResources `json:"resources"`
+	AgentVersion   string                 `json:"agent_version"`
+	CollectedAt    int64                  `json:"collected_at"`
+	NoUserLoggedIn bool                   `json:"no_user_logged_in"`
 
 	IDEExtensions        []model.Extension               `json:"ide_extensions"`
 	IDEInstallations     []model.IDE                     `json:"ide_installations"`
@@ -190,15 +191,25 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	log.Progress("Gathering device information...")
 	dev := device.Gather(ctx, exec)
 	deviceID = dev.SerialNumber
+	// Single source of truth for "is this a real developer or a daemon
+	// context?" — same predicate the payload uses below, so the warning,
+	// the Developer: line, and the telemetry field always agree.
+	noUserLoggedIn := dev.UserIdentity == "" ||
+		dev.UserIdentity == "unknown" ||
+		(dev.UserIdentity == "root" && exec.IsRoot())
 	log.Progress("Device ID (Serial): %s", dev.SerialNumber)
 	log.Progress("OS Version: %s", dev.OSVersion)
-	log.Progress("Developer: %s", dev.UserIdentity)
-	log.Debug("device gathered: hostname=%q platform=%q serial=%q user_identity=%q", dev.Hostname, dev.Platform, dev.SerialNumber, dev.UserIdentity)
+	if noUserLoggedIn {
+		log.Progress("Developer: (no user logged in)")
+	} else {
+		log.Progress("Developer: %s", dev.UserIdentity)
+	}
+	log.Debug("device gathered: hostname=%q platform=%q serial=%q user_identity=%q no_user=%v", dev.Hostname, dev.Platform, dev.SerialNumber, dev.UserIdentity, noUserLoggedIn)
 	if dev.SerialNumber == "" {
 		log.Warn("device serial number could not be determined — telemetry will upload with empty device_id")
 	}
-	if dev.UserIdentity == "" || dev.UserIdentity == "unknown" {
-		log.Warn("user identity could not be determined — telemetry will be marked no_user_logged_in")
+	if noUserLoggedIn {
+		log.Warn("no real developer identity (UserIdentity=%q, root=%v) — telemetry will be marked no_user_logged_in", dev.UserIdentity, exec.IsRoot())
 	}
 
 	// Report "started" now that we have a device_id. Fire-and-forget.
@@ -526,9 +537,10 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 		Hostname:       dev.Hostname,
 		Platform:       dev.Platform,
 		OSVersion:      dev.OSVersion,
+		Resources:      dev.Resources,
 		AgentVersion:   buildinfo.Version,
 		CollectedAt:    endTime.Unix(),
-		NoUserLoggedIn: dev.UserIdentity == "" || dev.UserIdentity == "unknown",
+		NoUserLoggedIn: noUserLoggedIn,
 
 		IDEExtensions:        extensions,
 		IDEInstallations:     ides,
@@ -878,8 +890,11 @@ func resolveSearchDirs(exec executor.Executor, dirs []string) []string {
 	resolved := make([]string, 0, len(dirs))
 	for _, d := range dirs {
 		if d == "$HOME" {
-			u, err := exec.LoggedInUser()
-			if err == nil {
+			if u, err := exec.LoggedInUser(); err == nil {
+				d = u.HomeDir
+			} else if u, err := exec.CurrentUser(); err == nil {
+				// No console user (issue #63): still expand to *some* home
+				// or the literal "$HOME" would propagate downstream.
 				d = u.HomeDir
 			}
 		}

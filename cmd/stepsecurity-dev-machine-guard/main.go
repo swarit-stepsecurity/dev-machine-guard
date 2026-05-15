@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"runtime"
 
+	aiagentscli "github.com/step-security/dev-machine-guard/internal/aiagents/cli"
 	"github.com/step-security/dev-machine-guard/internal/buildinfo"
 	"github.com/step-security/dev-machine-guard/internal/cli"
 	"github.com/step-security/dev-machine-guard/internal/config"
@@ -18,6 +20,18 @@ import (
 )
 
 func main() {
+	// Hook hot path. Agents invoke `_hook` on every event and any non-zero
+	// exit is treated as a hook failure / block — so we MUST exit 0 even on
+	// malformed args. Skip every line below this branch (CLI parsing,
+	// executor construction, logger setup) to keep the runtime budget
+	// realistic; the 15s hook cap has to absorb identity probes and a 5s
+	// upload, every millisecond here is dead weight. RunHook owns its own
+	// minimal config.Load (just enough for the upload gate) so this branch
+	// stays free of the rest of main's setup work.
+	if len(os.Args) >= 2 && os.Args[1] == "_hook" {
+		os.Exit(aiagentscli.RunHook(os.Stdin, os.Stdout, os.Stderr, os.Args[2:]))
+	}
+
 	// Load persisted config (~/.stepsecurity/config.json) before parsing CLI
 	config.Load()
 
@@ -131,8 +145,22 @@ func main() {
 		}
 		log.Progress("Sending initial telemetry...")
 		fmt.Println()
-		if err := telemetry.Run(exec, log, cfg); err != nil {
-			log.Error("%v", err)
+		telemetryErr := telemetry.Run(exec, log, cfg)
+
+		// On Linux, systemd.Install enabled the timer but did not start it.
+		// Start it now that the inline scan above has released the singleton
+		// lock, so the timer's first (Persistent=true catch-up) firing does
+		// not race with that scan (issue #62). Run regardless of the
+		// telemetry result — the install itself succeeded and the schedule
+		// should activate; a failed initial telemetry run does not undo it.
+		if runtime.GOOS == "linux" {
+			if err := systemd.StartTimer(exec, log); err != nil {
+				log.Warn("timer start failed (%v) — scheduled scans will resume after the next user-systemd reload", err)
+			}
+		}
+
+		if telemetryErr != nil {
+			log.Error("%v", telemetryErr)
 			os.Exit(1)
 		}
 
@@ -158,6 +186,12 @@ func main() {
 			log.Error("Scheduled installation is not supported on %s", runtime.GOOS)
 			os.Exit(1)
 		}
+
+	case "hooks install":
+		os.Exit(aiagentscli.RunInstall(context.Background(), exec, cfg.HooksAgent, os.Stdout, os.Stderr))
+
+	case "hooks uninstall":
+		os.Exit(aiagentscli.RunUninstall(context.Background(), exec, cfg.HooksAgent, os.Stdout, os.Stderr))
 
 	default:
 		// Community mode or auto-detect enterprise

@@ -38,6 +38,11 @@ func (d *PythonPMDetector) DetectManagers(ctx context.Context) []model.PkgManage
 		if err != nil {
 			continue
 		}
+		if d.exec.IsAppleCLTStub(ctx, path) {
+			// Skip Apple's /usr/bin/ shims on Macs without Command Line Tools;
+			// running `--version` against them pops a GUI install prompt.
+			continue
+		}
 
 		version := "unknown"
 		stdout, _, _, err := d.exec.RunWithTimeout(ctx, 10*time.Second, pm.Binary, pm.VersionCmd)
@@ -60,7 +65,8 @@ func (d *PythonPMDetector) DetectManagers(ctx context.Context) []model.PkgManage
 
 // ListPackages returns installed Python packages using pip3.
 func (d *PythonPMDetector) ListPackages(ctx context.Context) []model.PythonPackage {
-	if _, err := d.exec.LookPath("pip3"); err != nil {
+	path, err := d.exec.LookPath("pip3")
+	if err != nil || d.exec.IsAppleCLTStub(ctx, path) {
 		return nil
 	}
 	stdout, _, _, err := d.exec.RunWithTimeout(ctx, 30*time.Second, "pip3", "list", "--format", "json")

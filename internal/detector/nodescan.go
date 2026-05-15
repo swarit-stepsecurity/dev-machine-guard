@@ -210,7 +210,8 @@ func (s *NodeScanner) scanPnpmGlobal(ctx context.Context) (model.NodeScanResult,
 	globalDir = filepath.Dir(globalDir)
 
 	start := time.Now()
-	stdout, stderr, exitCode, _ := s.runCmd(ctx, 60*time.Second, "pnpm", "list", "-g", "--json", "--depth=3")
+	// pnpm v11 exits non-zero on `--depth=3` for global scans; use `--depth=Infinity` there.
+	stdout, stderr, exitCode, _ := s.runCmd(ctx, 60*time.Second, "pnpm", "list", "-g", "--json", pnpmDepthArg(version))
 	duration := time.Since(start).Milliseconds()
 
 	errMsg := ""
@@ -403,4 +404,20 @@ func (s *NodeScanner) getOutput(ctx context.Context, binary string, args ...stri
 func isInsideNodeModules(projectDir string) bool {
 	normalized := strings.ReplaceAll(projectDir, "\\", "/")
 	return strings.Contains(normalized, "/node_modules/")
+}
+
+// pnpmDepthArg picks the `--depth` arg for `pnpm list -g` based on the pnpm
+// version. pnpm v11 exits non-zero when `--depth=3` is passed to a global
+// scan; `--depth=Infinity` works on v11 and preserves transitive depth.
+// Falls back to `--depth=3` for older / unparseable versions to preserve
+// existing behavior.
+func pnpmDepthArg(version string) string {
+	v := strings.TrimSpace(version)
+	v = strings.TrimPrefix(v, "v")
+	major, _, _ := strings.Cut(v, ".")
+	n, err := strconv.Atoi(major)
+	if err == nil && n >= 11 {
+		return "--depth=Infinity"
+	}
+	return "--depth=3"
 }

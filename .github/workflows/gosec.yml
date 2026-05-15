@@ -1,0 +1,45 @@
+name: Gosec
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly catch for new gosec rule additions vs. the codebase.
+    - cron: '17 13 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  gosec:
+    name: Gosec Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for uploading SARIF to the Security tab.
+      security-events: write
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+
+      - name: Run Gosec
+        uses: securego/gosec@4a3bd8af174872c778439083ded7adbf3747e770 # v2.26.1
+        with:
+          # -fmt sarif writes SARIF for the GitHub code-scanning UI.
+          # -no-fail keeps the workflow green; findings still show up in
+          # the Security tab and the PR Files-changed view.
+          args: '-no-fail -fmt sarif -out results.sarif ./...'
+
+      - name: Upload SARIF to GitHub code-scanning
+        uses: github/codeql-action/upload-sarif@68bde559dea0fdcac2102bfdf6230c5f70eb485e # v4.35.4
+        with:
+          sarif_file: results.sarif

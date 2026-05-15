@@ -224,13 +224,13 @@ type brewInfoV2 struct {
 }
 
 type brewFormula struct {
-	Name      string `json:"name"`
-	Tap       string `json:"tap"`
-	Desc      string `json:"desc"`
-	License   string `json:"license"`
-	Homepage  string `json:"homepage"`
-	Deprecated bool  `json:"deprecated"`
-	Installed []struct {
+	Name       string `json:"name"`
+	Tap        string `json:"tap"`
+	Desc       string `json:"desc"`
+	License    string `json:"license"`
+	Homepage   string `json:"homepage"`
+	Deprecated bool   `json:"deprecated"`
+	Installed  []struct {
 		Version               string `json:"version"`
 		Time                  int64  `json:"time"`
 		InstalledAsDependency bool   `json:"installed_as_dependency"`

@@ -30,11 +30,24 @@ type ScanResult struct {
 }
 
 type Device struct {
-	Hostname     string `json:"hostname"`
-	SerialNumber string `json:"serial_number"`
-	OSVersion    string `json:"os_version"`
-	Platform     string `json:"platform"`
-	UserIdentity string `json:"user_identity"`
+	Hostname     string           `json:"hostname"`
+	SerialNumber string           `json:"serial_number"`
+	OSVersion    string           `json:"os_version"`
+	Platform     string           `json:"platform"`
+	UserIdentity string           `json:"user_identity"`
+	Resources    MachineResources `json:"resources"`
+}
+
+// MachineResources captures the static hardware capacity of the machine —
+// what's there, not what's currently in use. Answers "how much resource
+// does this machine have?".
+type MachineResources struct {
+	CPUModel        string `json:"cpu_model"`        // e.g. "Apple M3 Pro", "Intel(R) Core(TM) i9-13900K"
+	CPUArchitecture string `json:"cpu_architecture"` // "arm64", "amd64"
+	PhysicalCores   int    `json:"physical_cores"`   // 0 if undeterminable
+	LogicalCores    int    `json:"logical_cores"`    // includes SMT/hyperthreads
+	MemoryBytes     uint64 `json:"memory_bytes"`     // total installed RAM
+	DiskTotalBytes  uint64 `json:"disk_total_bytes"` // capacity of the system/root volume
 }
 
 // AITool represents a detected AI agent, CLI tool, framework, or general agent.
@@ -142,12 +155,12 @@ type SystemPackage struct {
 	InstallTimeUnix int64  `json:"install_time_unix,omitempty"` // Unix epoch seconds when installed (rpm, dpkg, pacman)
 
 	// Provenance & trust signals
-	Vendor       string `json:"vendor,omitempty"`          // Distributor: rpm VENDOR, dpkg Origin
-	Maintainer   string `json:"maintainer,omitempty"`      // Packager identity: rpm PACKAGER, dpkg Maintainer, apk maintainer, pacman Packager
-	URL          string `json:"url,omitempty"`             // Upstream project URL
-	License      string `json:"license,omitempty"`         // SPDX license expression
-	Section      string `json:"section,omitempty"`         // dpkg Section category (e.g. "libs", "non-free/libs")
-	Signature    string `json:"signature,omitempty"`       // Signature info: rpm SIGPGP/RSAHEADER, pacman Validated By
+	Vendor        string `json:"vendor,omitempty"`          // Distributor: rpm VENDOR, dpkg Origin
+	Maintainer    string `json:"maintainer,omitempty"`      // Packager identity: rpm PACKAGER, dpkg Maintainer, apk maintainer, pacman Packager
+	URL           string `json:"url,omitempty"`             // Upstream project URL
+	License       string `json:"license,omitempty"`         // SPDX license expression
+	Section       string `json:"section,omitempty"`         // dpkg Section category (e.g. "libs", "non-free/libs")
+	Signature     string `json:"signature,omitempty"`       // Signature info: rpm SIGPGP/RSAHEADER, pacman Validated By
 	BuildTimeUnix int64  `json:"build_time_unix,omitempty"` // Unix epoch when package was built (rpm, apk, pacman)
 
 	// Size

@@ -39,6 +39,18 @@ type Mock struct {
 
 	// Symlink stubs: path -> resolved target
 	symlinks map[string]string
+
+	// macOS Command Line Tools presence (false simulates a Mac without CLT
+	// installed, where /usr/bin/python3 etc. are install-prompt shims).
+	appleCLTInstalled bool
+
+	// Disk capacity stubs: path -> total bytes
+	diskCapacities map[string]uint64
+
+	// LoggedInUser override — when set, LoggedInUser returns (nil, err)
+	// instead of falling through to CurrentUser. Used by tests covering
+	// the macOS+root "no console user" branch (issue #63).
+	loggedInUserErr error
 }
 
 type cmdResult struct {
@@ -50,19 +62,20 @@ type cmdResult struct {
 
 func NewMock() *Mock {
 	return &Mock{
-		commands:  make(map[string]cmdResult),
-		files:     make(map[string][]byte),
-		dirs:      make(map[string]bool),
-		dirEnts:   make(map[string][]os.DirEntry),
-		fileInfos: make(map[string]os.FileInfo),
-		paths:     make(map[string]string),
-		env:       make(map[string]string),
-		globs:     make(map[string][]string),
-		symlinks:  make(map[string]string),
-		hostname:  "test-host",
-		username:  "testuser",
-		homeDir:   "/Users/testuser",
-		goos:      "darwin",
+		commands:       make(map[string]cmdResult),
+		files:          make(map[string][]byte),
+		dirs:           make(map[string]bool),
+		dirEnts:        make(map[string][]os.DirEntry),
+		fileInfos:      make(map[string]os.FileInfo),
+		paths:          make(map[string]string),
+		env:            make(map[string]string),
+		globs:          make(map[string][]string),
+		symlinks:       make(map[string]string),
+		diskCapacities: make(map[string]uint64),
+		hostname:       "test-host",
+		username:       "testuser",
+		homeDir:        "/Users/testuser",
+		goos:           "darwin",
 	}
 }
 
@@ -162,6 +175,30 @@ func (m *Mock) SetGOOS(goos string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.goos = goos
+}
+
+// SetAppleCLTInstalled controls the value returned by IsAppleCLTStub.
+// Default is false (CLT not installed → binaries in the appleCLTStubBinaries
+// allowlist are reported as stubs; other /usr/bin/ paths are unaffected).
+func (m *Mock) SetAppleCLTInstalled(installed bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.appleCLTInstalled = installed
+}
+
+// SetDiskCapacityBytes stubs the result of DiskCapacityBytes(path).
+func (m *Mock) SetDiskCapacityBytes(path string, bytes uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.diskCapacities[path] = bytes
+}
+
+// SetLoggedInUserError makes LoggedInUser return (nil, err). Pass nil to
+// reset to default behavior (delegating to CurrentUser).
+func (m *Mock) SetLoggedInUserError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.loggedInUserErr = err
 }
 
 // --- Executor interface ---
@@ -285,6 +322,12 @@ func (m *Mock) Glob(pattern string) ([]string, error) {
 }
 
 func (m *Mock) LoggedInUser() (*user.User, error) {
+	m.mu.RLock()
+	err := m.loggedInUserErr
+	m.mu.RUnlock()
+	if err != nil {
+		return nil, err
+	}
 	return m.CurrentUser()
 }
 
@@ -302,6 +345,24 @@ func (m *Mock) GOOS() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.goos
+}
+
+func (m *Mock) IsAppleCLTStub(_ context.Context, binPath string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.goos != "darwin" {
+		return false
+	}
+	if _, ok := appleCLTStubBinaries[binPath]; !ok {
+		return false
+	}
+	return !m.appleCLTInstalled
+}
+
+func (m *Mock) DiskCapacityBytes(path string) uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.diskCapacities[path]
 }
 
 // --- helpers ---

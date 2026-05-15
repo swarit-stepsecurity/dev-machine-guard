@@ -206,6 +206,89 @@ func TestNodeScanner_ScanProject_YarnBerry_Windows(t *testing.T) {
 	}
 }
 
+func TestPnpmDepthArg(t *testing.T) {
+	tests := []struct {
+		version string
+		want    string
+	}{
+		{"", "--depth=3"},
+		{"unknown", "--depth=3"},
+		{"9.1.0", "--depth=3"},
+		{"10.12.4", "--depth=3"},
+		{"11.0.0", "--depth=Infinity"},
+		{"11.1.1", "--depth=Infinity"},
+		{"v12.0.0\n", "--depth=Infinity"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			got := pnpmDepthArg(tt.version)
+			if got != tt.want {
+				t.Errorf("pnpmDepthArg(%q) = %q, want %q", tt.version, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNodeScanner_ScanPnpmGlobal_V11(t *testing.T) {
+	mock := executor.NewMock()
+	mock.SetPath("pnpm", "/opt/homebrew/bin/pnpm")
+	mock.SetCommand("11.1.1\n", "", 0, "pnpm", "--version")
+	mock.SetCommand("/Users/dev/Library/pnpm/global/v11/abc/node_modules\n", "", 0, "pnpm", "root", "-g")
+	// v11 must use --depth=Infinity; --depth=3 would fail in real life.
+	mock.SetCommand(`{"dependencies":{"jest":{"version":"29.7.0"}}}`, "", 0, "pnpm", "list", "-g", "--json", "--depth=Infinity")
+
+	scanner := newTestScanner(mock)
+	results := scanner.ScanGlobalPackages(context.Background())
+
+	pnpmFound := false
+	for _, r := range results {
+		if r.PackageManager == "pnpm" {
+			pnpmFound = true
+			if r.PMVersion != "11.1.1" {
+				t.Errorf("expected PMVersion 11.1.1, got %s", r.PMVersion)
+			}
+			if r.ExitCode != 0 {
+				t.Errorf("expected ExitCode 0, got %d", r.ExitCode)
+			}
+			decoded, _ := base64.StdEncoding.DecodeString(r.RawStdoutBase64)
+			if len(decoded) == 0 {
+				t.Error("expected non-empty RawStdoutBase64")
+			}
+		}
+	}
+	if !pnpmFound {
+		t.Fatal("expected pnpm in global scan results for v11")
+	}
+}
+
+func TestNodeScanner_ScanPnpmGlobal_V10_StillUsesDepth3(t *testing.T) {
+	mock := executor.NewMock()
+	mock.SetPath("pnpm", "/usr/local/bin/pnpm")
+	mock.SetCommand("10.12.4\n", "", 0, "pnpm", "--version")
+	mock.SetCommand("/Users/dev/.local/share/pnpm/global/5/node_modules\n", "", 0, "pnpm", "root", "-g")
+	// v10 must still use --depth=3 (proves we didn't break the legacy path).
+	mock.SetCommand(`{"dependencies":{"typescript":{"version":"5.4.0"}}}`, "", 0, "pnpm", "list", "-g", "--json", "--depth=3")
+
+	scanner := newTestScanner(mock)
+	results := scanner.ScanGlobalPackages(context.Background())
+
+	pnpmFound := false
+	for _, r := range results {
+		if r.PackageManager == "pnpm" {
+			pnpmFound = true
+			if r.PMVersion != "10.12.4" {
+				t.Errorf("expected PMVersion 10.12.4, got %s", r.PMVersion)
+			}
+			if r.ExitCode != 0 {
+				t.Errorf("expected ExitCode 0, got %d", r.ExitCode)
+			}
+		}
+	}
+	if !pnpmFound {
+		t.Fatal("expected pnpm in global scan results for v10")
+	}
+}
+
 func TestNodeScanner_ScanGlobalPackages_NoneInstalled(t *testing.T) {
 	mock := executor.NewMock()
 	scanner := newTestScanner(mock)
