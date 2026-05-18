@@ -69,10 +69,16 @@ func (s *NodeScanner) runCmd(ctx context.Context, timeout time.Duration, name st
 	return s.exec.RunWithTimeout(ctx, timeout, name, args...)
 }
 
-// runShellCmd runs a shell command string, delegating to the logged-in user when running as root.
-// Falls through to the platform-aware free function for the normal (non-delegation) path.
-func (s *NodeScanner) runShellCmd(ctx context.Context, timeout time.Duration, shellCmd string) (string, string, int, error) {
+// runCmdInDir runs a command from `dir`, delegating to the logged-in user when
+// running as root. On Windows this bypasses cmd /c entirely (see runCmdInDir
+// in shellcmd.go); RunAsUser delegation is Unix-only, so the sudo path always
+// constructs a shell string.
+func (s *NodeScanner) runCmdInDir(ctx context.Context, timeout time.Duration, dir, name string, args ...string) (string, string, int, error) {
 	if s.shouldRunAsUser() {
+		shellCmd := "cd " + platformShellQuote(s.exec, dir) + " && " + name
+		for _, a := range args {
+			shellCmd += " " + a
+		}
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		stdout, err := s.exec.RunAsUser(ctx, s.loggedInUser, shellCmd)
@@ -84,7 +90,7 @@ func (s *NodeScanner) runShellCmd(ctx context.Context, timeout time.Duration, sh
 		}
 		return stdout, "", 0, nil
 	}
-	return runShellCmd(ctx, s.exec, timeout, shellCmd)
+	return runCmdInDir(ctx, s.exec, timeout, dir, name, args...)
 }
 
 // checkPath checks if a binary is available, using the logged-in user's PATH when running as root.
@@ -167,8 +173,7 @@ func (s *NodeScanner) scanYarnGlobal(ctx context.Context) (model.NodeScanResult,
 	}
 
 	start := time.Now()
-	shellCmd := "cd " + platformShellQuote(s.exec, globalDir) + " && yarn list --json --depth=0"
-	stdout, stderr, exitCode, _ := s.runShellCmd(ctx, 60*time.Second, shellCmd)
+	stdout, stderr, exitCode, _ := s.runCmdInDir(ctx, 60*time.Second, globalDir, "yarn", "list", "--json", "--depth=0")
 	duration := time.Since(start).Milliseconds()
 
 	errMsg := ""
@@ -424,11 +429,7 @@ func (s *NodeScanner) scanProject(ctx context.Context, projectDir string) model.
 	}
 
 	start := time.Now()
-	cmdStr := "cd " + platformShellQuote(s.exec, projectDir) + " && " + cmd
-	for _, a := range args {
-		cmdStr += " " + a
-	}
-	stdout, stderr, exitCode, _ := s.runShellCmd(ctx, 30*time.Second, cmdStr)
+	stdout, stderr, exitCode, _ := s.runCmdInDir(ctx, 30*time.Second, projectDir, cmd, args...)
 	duration := time.Since(start).Milliseconds()
 
 	errMsg := ""

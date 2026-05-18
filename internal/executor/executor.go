@@ -20,6 +20,11 @@ type Executor interface {
 	Run(ctx context.Context, name string, args ...string) (stdout, stderr string, exitCode int, err error)
 	// RunWithTimeout executes a command with a timeout.
 	RunWithTimeout(ctx context.Context, timeout time.Duration, name string, args ...string) (stdout, stderr string, exitCode int, err error)
+	// RunInDir executes a command with a timeout, in the given working directory.
+	// Used to avoid the `cmd /c "cd <dir> && <cmd>"` pattern on Windows, where
+	// Go's os/exec quoting and cmd.exe's quote-stripping rules conflict and
+	// mangle paths.
+	RunInDir(ctx context.Context, timeout time.Duration, dir, name string, args ...string) (stdout, stderr string, exitCode int, err error)
 	// RunAsUser runs a shell command as a specific user (for root -> user delegation).
 	RunAsUser(ctx context.Context, username, command string) (string, error)
 	// LookPath searches for an executable in PATH.
@@ -85,6 +90,29 @@ func (r *Real) RunWithTimeout(ctx context.Context, timeout time.Duration, name s
 		return stdout, stderr, 124, fmt.Errorf("command timed out after %s", timeout)
 	}
 	return stdout, stderr, code, err
+}
+
+func (r *Real) RunInDir(ctx context.Context, timeout time.Duration, dir, name string, args ...string) (string, string, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		return stdout.String(), stderr.String(), 124, fmt.Errorf("command timed out after %s", timeout)
+	}
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return stdout.String(), stderr.String(), -1, err
+		}
+	}
+	return stdout.String(), stderr.String(), exitCode, nil
 }
 
 func (r *Real) LookPath(name string) (string, error) {

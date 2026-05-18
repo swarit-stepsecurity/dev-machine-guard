@@ -167,6 +167,20 @@ func (m *Mock) RunWithTimeout(ctx context.Context, _ time.Duration, name string,
 	return m.Run(ctx, name, args...)
 }
 
+// RunInDir matches first on the (dir, name, args) tuple via SetCommandInDir,
+// then falls back to plain (name, args) — so existing tests that don't care
+// about the working directory don't need to be rewritten.
+func (m *Mock) RunInDir(ctx context.Context, _ time.Duration, dir, name string, args ...string) (string, string, int, error) {
+	m.mu.RLock()
+	key := cmdKey(dir+"|"+name, args...)
+	if r, ok := m.commands[key]; ok {
+		m.mu.RUnlock()
+		return r.Stdout, r.Stderr, r.ExitCode, r.Err
+	}
+	m.mu.RUnlock()
+	return m.Run(ctx, name, args...)
+}
+
 func (m *Mock) RunAsUser(ctx context.Context, _ string, command string) (string, error) {
 	stdout, _, _, err := m.Run(ctx, "bash", "-c", command)
 	return stdout, err
