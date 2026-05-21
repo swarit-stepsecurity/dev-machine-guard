@@ -37,10 +37,10 @@ func isElevated() bool {
 func hardenMachineConfigACL(path string) error {
 	args := []string{
 		path,
-		"/inheritance:r", // remove inherited ACEs
-		"/grant:r", "*S-1-5-18:F",      // NT AUTHORITY\SYSTEM = Full
-		"/grant:r", "*S-1-5-32-544:F",  // BUILTIN\Administrators = Full
-		"/grant:r", "*S-1-5-32-545:R",  // BUILTIN\Users = Read
+		"/inheritance:r",          // remove inherited ACEs
+		"/grant:r", "*S-1-5-18:F", // NT AUTHORITY\SYSTEM = Full
+		"/grant:r", "*S-1-5-32-544:F", // BUILTIN\Administrators = Full
+		"/grant:r", "*S-1-5-32-545:R", // BUILTIN\Users = Read
 		"/Q",
 	}
 	return exec.Command("icacls", args...).Run()
