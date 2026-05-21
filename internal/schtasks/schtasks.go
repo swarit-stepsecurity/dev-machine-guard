@@ -101,7 +101,13 @@ func buildCreateArgs(binaryPath, logDir string, hours int, isAdmin bool) []strin
 	args := []string{"/create", "/tn", taskName, "/tr", taskCmd,
 		"/sc", "HOURLY", "/mo", strconv.Itoa(hours), "/f"}
 	if isAdmin {
-		args = append(args, "/ru", "SYSTEM")
+		// /ru INTERACTIVE binds the task to the BUILTIN\INTERACTIVE group
+		// (SID S-1-5-4) so it fires under the security context of whoever
+		// is interactively logged on at trigger time — picking up their
+		// HKCU, %USERPROFILE%, and PATH. /ru SYSTEM would run as
+		// NT AUTHORITY\SYSTEM, which can't see any of the user-scoped
+		// data the scanner depends on.
+		args = append(args, "/ru", "INTERACTIVE")
 	}
 	return args
 }
