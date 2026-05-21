@@ -9,16 +9,17 @@ SCCM, now part of Microsoft Intune family as MEMCM / ConfigMgr).
 - `stepsecurity-dev-machine-guard-<version>-x64.msi` (Windows on Intel/AMD)
 - `stepsecurity-dev-machine-guard-<version>-arm64.msi` (Windows on ARM)
 
-Both are signed Windows Installer packages. SCCM consumes them natively
-as **Application** deployment type "Windows Installer (`*.msi`)". Detection
-rule and uninstall command are auto-derived from the MSI `ProductCode`
-— no scripting required on your side.
+SCCM consumes them natively as **Application** deployment type "Windows
+Installer (`*.msi`)". Detection rule and uninstall command are auto-derived
+from the MSI `ProductCode` — no scripting required on your side. Each MSI
+ships with a Sigstore (cosign) bundle alongside it for supply-chain
+verification (see [Signature verification](#signature-verification) below).
 
 ## Why MSI and not a script
 
-The customer environments we built this for typically have an EDR rule
-that blocks `powershell.exe` from making outbound network calls. Our MSI
-install/upgrade/uninstall flows **never spawn PowerShell**. The chain is:
+Many enterprise environments block PowerShell from making outbound
+network calls via EDR. Our MSI install/upgrade/uninstall flows **never
+spawn PowerShell**. The chain is:
 
 ```
 SCCM → msiexec.exe → stepsecurity-dev-machine-guard.exe → schtasks.exe
@@ -46,7 +47,7 @@ install path touches `powershell.exe`.
 Use this in the SCCM Application's **Installation program** field:
 
 ```cmd
-msiexec /i "stepsecurity-dev-machine-guard-1.8.2-x64.msi" /qn ^
+msiexec /i "stepsecurity-dev-machine-guard-<version>-x64.msi" /qn ^
   CUSTOMERID="acme-corp" ^
   APIENDPOINT="https://api.stepsecurity.io" ^
   APIKEY="sk_live_xxxxxxxxxxxxxxxx" ^
@@ -86,7 +87,7 @@ Contents:
 that path:
 
 ```cmd
-msiexec /i "stepsecurity-dev-machine-guard-1.8.2-x64.msi" /qn ^
+msiexec /i "stepsecurity-dev-machine-guard-<version>-x64.msi" /qn ^
   BOOTSTRAPFILE="C:\ProgramData\StepSecurity\bootstrap.json" ^
   /l*v "C:\Windows\Temp\dmg-install.log"
 ```
@@ -122,8 +123,8 @@ tenant API key. If that's not acceptable for your environment:
   yourself (the installer only manages `config.json`'s ACL)
 - Or scope deployment to single-user machines via SCCM collection
   requirements
-- Or open an issue if you'd like first-class support for DPAPI-encrypted
-  storage; we'll prioritize based on demand
+- DPAPI-backed storage is on our roadmap; open a feature request to
+  register interest
 
 ## SCCM Application setup, step by step
 
@@ -131,7 +132,7 @@ tenant API key. If that's not acceptable for your environment:
 2. **Manually specify the application information**:
    - Name: `StepSecurity Dev Machine Guard`
    - Publisher: `StepSecurity`
-   - Software version: matches MSI (e.g. `1.8.2`)
+   - Software version: matches the MSI you're deploying (e.g. `1.11.2`)
 3. **Add Deployment Type** → **Windows Installer (`*.msi`)**
 4. **Content**: point at the `.msi` file on a share that the
    Distribution Points can pull from
@@ -230,17 +231,23 @@ C:\ProgramData\StepSecurity\agent.error.log
 
 ## Signature verification
 
-Each MSI release is signed via Sigstore and the bundle is published next
-to the artifact. To verify before deploying to your fleet:
+Each MSI release ships with a **Sigstore (cosign) bundle** for provenance
+— it proves the artifact was built by this repo's GitHub Actions release
+workflow from a tagged commit, with no out-of-band tampering. To verify
+before deploying to your fleet:
 
 ```bash
 # In a Linux/macOS environment with cosign installed
 cosign verify-blob \
-  --bundle stepsecurity-dev-machine-guard-1.8.2-x64.msi.bundle \
+  --bundle stepsecurity-dev-machine-guard-<version>-x64.msi.bundle \
   --certificate-identity-regexp 'https://github.com/step-security/dev-machine-guard/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  stepsecurity-dev-machine-guard-1.8.2-x64.msi
+  stepsecurity-dev-machine-guard-<version>-x64.msi
 ```
 
-A passing verification confirms the MSI was built by our GitHub release
-workflow from a tagged commit in this repo.
+> **Authenticode (Windows publisher signature)**: not yet applied. The
+> Sigstore bundle above is build-provenance signing, which is a different
+> system from Authenticode (the certificate-based signature Windows checks
+> in UAC / SmartScreen / WDAC). If your environment requires
+> Authenticode-signed installers as a deployment precondition, please open
+> an issue — it's a tracked roadmap item.

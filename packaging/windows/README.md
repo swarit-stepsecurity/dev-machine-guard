@@ -1,16 +1,24 @@
 # MSI packaging
 
 This directory holds the WiX 4 manifest used to wrap the Windows binary
-into a signed MSI for SCCM / Intune / Group Policy deployments.
+into an MSI for SCCM / Intune / Group Policy deployments.
 
 ## Local build
 
-Requires **WiX 4** (cross-platform .NET tool — works on macOS / Linux /
-Windows):
+Requires **WiX 4** plus the `WixToolset.Util.wixext` extension (the
+manifest uses `WixQuietExec` from the Util extension to drive custom
+actions in deferred context):
 
 ```bash
 dotnet tool install --global wix --version 4.0.5
+wix extension add --global WixToolset.Util.wixext/4.0.5
 ```
+
+WiX 4 nominally supports macOS / Linux as well as Windows, but at the
+4.0.5 version we pin, the non-Windows hosts have bugs in path-handling
+that break our manifest (Directory/@Name validation). The release
+workflow in this repo runs the MSI build on `windows-latest` for that
+reason; local development on Windows is the supported path.
 
 Then from the repo root:
 
@@ -41,8 +49,9 @@ top-level `build-windows` target is hardcoded amd64 only, so don't try
 | On uninstall: remove scheduled task | Custom action invokes `.exe uninstall` |
 
 **`powershell.exe` is never spawned.** All work flows: `msiexec` →
-`stepsecurity-dev-machine-guard.exe` → `schtasks.exe`. This matters in
-customer environments where EDR blocks PowerShell egress.
+WiX's `WixQuietExec` (Util extension) → `stepsecurity-dev-machine-guard.exe`
+→ `schtasks.exe`. This matters in environments where EDR blocks
+PowerShell egress — a common enterprise posture.
 
 ## How tenants pass credentials
 
@@ -52,7 +61,7 @@ command:
 ### Inline (simplest)
 
 ```cmd
-msiexec /i StepSecurity-DMG-x64.msi /qn ^
+msiexec /i stepsecurity-dev-machine-guard-<version>-x64.msi /qn ^
   CUSTOMERID="acme-corp" ^
   APIENDPOINT="https://api.stepsecurity.io" ^
   APIKEY="sk_..." ^
@@ -80,7 +89,7 @@ Drop a JSON config via GPO / Intune File preferences first:
 …at `C:\ProgramData\StepSecurity\bootstrap.json`, then deploy the MSI:
 
 ```cmd
-msiexec /i StepSecurity-DMG-x64.msi /qn ^
+msiexec /i stepsecurity-dev-machine-guard-<version>-x64.msi /qn ^
   BOOTSTRAPFILE="C:\ProgramData\StepSecurity\bootstrap.json"
 ```
 
