@@ -33,7 +33,6 @@ package filelog
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -221,14 +220,16 @@ func (c *Capture) Stop() error {
 
 func (c *Capture) teeLoop() {
 	defer close(c.done)
-	dst := io.MultiWriter(c.origErr, c.file)
 	buf := make([]byte, 4096)
 	for {
 		n, err := c.pipeRead.Read(buf)
 		if n > 0 {
-			// Best-effort: a failed write to dst (file full, disk
-			// removed) must not stall the agent.
-			_, _ = dst.Write(buf[:n])
+			// File first, origErr second. io.MultiWriter aborts on the
+			// first error, so an invalid origErr (GUI-subsystem agent
+			// with no parent console) used to drop the file write too.
+			// Both ignored — neither failure should stall the agent.
+			_, _ = c.file.Write(buf[:n])
+			_, _ = c.origErr.Write(buf[:n])
 		}
 		if err != nil {
 			return

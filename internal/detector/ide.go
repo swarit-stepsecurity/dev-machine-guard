@@ -238,7 +238,7 @@ func (d *IDEDetector) detectDarwin(ctx context.Context, spec ideSpec) (model.IDE
 
 	// Fallback: product-info.json (JetBrains IDEs)
 	if version == "unknown" {
-		version = readProductInfoVersion(d.exec, filepath.Join(spec.AppPath, "Contents", "Resources", "product-info.json"))
+		version = readJSONVersion(d.exec, filepath.Join(spec.AppPath, "Contents", "Resources", "product-info.json"))
 	}
 
 	// Fallback: Info.plist
@@ -328,7 +328,7 @@ func (d *IDEDetector) resolveLinuxVersion(ctx context.Context, spec ideSpec, ins
 	}
 
 	// product-info.json at the root of the install dir (JetBrains, some Electron apps)
-	if v := readProductInfoVersion(d.exec, filepath.Join(installDir, "product-info.json")); v != "unknown" {
+	if v := readJSONVersion(d.exec, filepath.Join(installDir, "product-info.json")); v != "unknown" {
 		return v
 	}
 
@@ -378,9 +378,14 @@ func (d *IDEDetector) resolveWindowsVersion(ctx context.Context, spec ideSpec, i
 	return version
 }
 
-// resolveWindowsVersionFromDir tries binary, product-info.json, and .eclipseproduct.
-// Does NOT query the registry (caller handles that to avoid redundant queries).
+// resolveWindowsVersionFromDir tries package.json, the binary,
+// product-info.json, .eclipseproduct (in order). package.json first
+// avoids the bin\*.cmd shell-out for VS Code-family Electron IDEs.
 func (d *IDEDetector) resolveWindowsVersionFromDir(ctx context.Context, spec ideSpec, installDir string) string {
+	if v := readJSONVersion(d.exec, filepath.Join(installDir, "resources", "app", "package.json")); v != "unknown" {
+		return v
+	}
+
 	version := "unknown"
 
 	if spec.WinBinary != "" && spec.VersionFlag != "" {
@@ -391,7 +396,7 @@ func (d *IDEDetector) resolveWindowsVersionFromDir(ctx context.Context, spec ide
 	}
 
 	if version == "unknown" {
-		version = readProductInfoVersion(d.exec, filepath.Join(installDir, "product-info.json"))
+		version = readJSONVersion(d.exec, filepath.Join(installDir, "product-info.json"))
 	}
 
 	if version == "unknown" {
@@ -487,9 +492,10 @@ func runVersionCmd(ctx context.Context, exec executor.Executor, binary, flag str
 	return "unknown"
 }
 
-// readProductInfoVersion reads the "version" field from a JetBrains product-info.json file.
-// Returns "unknown" if the file does not exist or cannot be parsed.
-func readProductInfoVersion(exec executor.Executor, filePath string) string {
+// readJSONVersion reads top-level "version" from a JSON file (used
+// for JetBrains product-info.json and VS Code-family package.json).
+// Returns "unknown" if the file is missing or unparseable.
+func readJSONVersion(exec executor.Executor, filePath string) string {
 	data, err := exec.ReadFile(filePath)
 	if err != nil {
 		return "unknown"

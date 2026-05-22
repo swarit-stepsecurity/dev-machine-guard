@@ -38,6 +38,11 @@ import (
 const hookReconcileTimeout = 30 * time.Second
 
 func main() {
+	// Windows GUI-subsystem build needs this to restore stdio for
+	// interactive runs. No-op under Task Scheduler / non-Windows.
+	// Must run before any logging.
+	AttachParentConsole()
+
 	// Hook hot path. Agents invoke `_hook` on every event and any non-zero
 	// exit is treated as a hook failure / block — so we MUST exit 0 even on
 	// malformed args. Skip every line below this branch (CLI parsing,

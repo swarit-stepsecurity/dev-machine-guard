@@ -55,14 +55,9 @@ func Install(exec executor.Executor, log *progress.Logger) error {
 		return fmt.Errorf("creating log directory: %w", err)
 	}
 
-	// For admin installs the log dir lives at C:\ProgramData\StepSecurity, which
-	// inherits ACLs from C:\ProgramData and only grants non-admin users
-	// Read & Execute on the files inside. The /ru INTERACTIVE task fires under
-	// whatever user is logged on — typically a non-admin developer — and
-	// cmd.exe's `>>` redirect to agent.log would fail with Access Denied, which
-	// aborts the whole task action. Grant BUILTIN\Users (SID 545) Modify rights
-	// on the log dir, propagated to files and subfolders, so any logged-in
-	// user can append to the log files.
+	// Admin install's ProgramData log dir is Users-read-only by default.
+	// /ru INTERACTIVE fires as the logged-in user and filelog needs to
+	// append agent.error.log — grant BUILTIN\Users (SID 545) Modify.
 	if exec.IsRoot() {
 		_, _, _, icaclsErr := exec.Run(ctx, "icacls", logDir, "/grant", "*S-1-5-32-545:(OI)(CI)M", "/Q")
 		if icaclsErr != nil {
@@ -70,21 +65,13 @@ func Install(exec executor.Executor, log *progress.Logger) error {
 		}
 	}
 
-	// Bake STEPSECURITY_HOME into the task command. Admin/INTERACTIVE
-	// tasks (machine-wide installs) anchor at C:\ProgramData\StepSecurity
-	// so the scheduled task and the MSI's earlier write_config agree on
-	// the dir, regardless of which interactive user is logged on at fire
-	// time. Non-admin tasks track paths.Home() (whatever the user's own
-	// install dir resolves to).
-	var stepHome string
-	if exec.IsRoot() {
-		stepHome = `C:\ProgramData\StepSecurity`
-	} else {
-		stepHome = paths.Home()
-	}
+	// Reuse logDir: its fallback chain ends at ProgramData so it's
+	// never empty. paths.Home() directly could yield "", which the CLI
+	// treats as opt-out (disables file logging).
+	stepHome := logDir
 
-	args := buildCreateArgs(binaryPath, logDir, stepHome, hours, exec.IsRoot())
-	log.Debug("schtasks create: binary=%q log_dir=%q step_home=%q hours=%d is_admin=%v", binaryPath, logDir, stepHome, hours, exec.IsRoot())
+	args := buildCreateArgs(binaryPath, stepHome, hours, exec.IsRoot())
+	log.Debug("schtasks create: binary=%q install_dir=%q hours=%d is_admin=%v", binaryPath, stepHome, hours, exec.IsRoot())
 
 	_, stderr, exitCode, err := exec.Run(ctx, "schtasks", args...)
 	log.Debug("schtasks /create: exit_code=%d err=%v", exitCode, err)
@@ -136,16 +123,11 @@ func isConfigured(ctx context.Context, exec executor.Executor) bool {
 	return exitCode == 0
 }
 
-func buildCreateArgs(binaryPath, logDir, stepHome string, hours int, isAdmin bool) []string {
-	// `set "VAR=value"` is the safe cmd.exe form when the value may
-	// contain spaces or `&` / `|` / `<` / `>` metacharacters — without
-	// the quotes, cmd.exe would split on the first space and the
-	// remainder would be treated as a separate command. Inside the outer
-	// `cmd /c "..."` quotes the inner double-quotes are escaped as `""`.
-	// stepHome ultimately comes from $HOME (e.g. `C:\Users\John Doe`),
-	// so quoting is load-bearing here.
-	taskCmd := fmt.Sprintf(`cmd /c "set ""STEPSECURITY_HOME=%s"" && \"%s\" send-telemetry >> \"%s\agent.log\" 2>> \"%s\agent.error.log\""`,
-		stepHome, binaryPath, logDir, logDir)
+// buildCreateArgs returns the schtasks /create args. Task invokes the
+// binary directly — the previous `cmd /c` wrapper flashed a console
+// on every fire; --install-dir + filelog handle what it did.
+func buildCreateArgs(binaryPath, stepHome string, hours int, isAdmin bool) []string {
+	taskCmd := fmt.Sprintf(`"%s" send-telemetry --install-dir="%s"`, binaryPath, stepHome)
 	args := []string{"/create", "/tn", taskName, "/tr", taskCmd,
 		"/sc", "HOURLY", "/mo", strconv.Itoa(hours), "/f"}
 	if isAdmin {

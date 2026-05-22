@@ -382,6 +382,33 @@ func TestIDEDetector_Windows_FindsEclipse_UserProfile_Glob(t *testing.T) {
 	}
 }
 
+// Version must come from package.json without shelling out to
+// bin\code.cmd. No command is mocked for the binary; falling through
+// fails the test.
+func TestIDEDetector_Windows_VSCode_PackageJSONFastPath(t *testing.T) {
+	mock := executor.NewMock()
+	mock.SetGOOS("windows")
+	mock.SetEnv("LOCALAPPDATA", `C:\Users\testuser\AppData\Local`)
+	mock.SetEnv("PROGRAMFILES", `C:\Program Files`)
+
+	vscodePath := `C:\Program Files\Microsoft VS Code`
+	mock.SetDir(vscodePath)
+	mock.SetFile(vscodePath+`/bin\code.cmd`, []byte{})
+	mock.SetFile(vscodePath+`/resources/app/package.json`,
+		[]byte(`{"name":"Code","version":"1.115.0"}`))
+
+	det := NewIDEDetector(mock)
+	results := det.Detect(context.Background())
+
+	found := findIDE(results, "vscode")
+	if found == nil {
+		t.Fatal("expected VS Code to be detected")
+	}
+	if found.Version != "1.115.0" {
+		t.Errorf("version should come from package.json (1.115.0), got %s", found.Version)
+	}
+}
+
 func TestIDEDetector_Windows_VSCode_StillWorks(t *testing.T) {
 	mock := executor.NewMock()
 	mock.SetGOOS("windows")
@@ -441,7 +468,7 @@ func TestReadProductInfoVersion(t *testing.T) {
 	mock.SetFile("/test/product-info.json",
 		[]byte(`{"name":"GoLand","version":"2025.1.3","buildNumber":"251.26927.50"}`))
 
-	v := readProductInfoVersion(mock, "/test/product-info.json")
+	v := readJSONVersion(mock, "/test/product-info.json")
 	if v != "2025.1.3" {
 		t.Errorf("expected 2025.1.3, got %s", v)
 	}
@@ -449,7 +476,7 @@ func TestReadProductInfoVersion(t *testing.T) {
 
 func TestReadProductInfoVersion_MissingFile(t *testing.T) {
 	mock := executor.NewMock()
-	v := readProductInfoVersion(mock, "/nonexistent/product-info.json")
+	v := readJSONVersion(mock, "/nonexistent/product-info.json")
 	if v != "unknown" {
 		t.Errorf("expected unknown, got %s", v)
 	}
@@ -459,7 +486,7 @@ func TestReadProductInfoVersion_InvalidJSON(t *testing.T) {
 	mock := executor.NewMock()
 	mock.SetFile("/test/product-info.json", []byte(`not json`))
 
-	v := readProductInfoVersion(mock, "/test/product-info.json")
+	v := readJSONVersion(mock, "/test/product-info.json")
 	if v != "unknown" {
 		t.Errorf("expected unknown, got %s", v)
 	}

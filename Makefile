@@ -14,11 +14,13 @@ LDFLAGS := -s -w \
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/stepsecurity-dev-machine-guard
 
+# -H windowsgui prevents Task Scheduler from allocating a console.
+# AttachParentConsole at startup restores stdio for interactive use.
 build-windows:
-	GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY).exe ./cmd/stepsecurity-dev-machine-guard
+	GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS) -H windowsgui" -o $(BINARY).exe ./cmd/stepsecurity-dev-machine-guard
 
 build-windows-arm64:
-	GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY)-arm64.exe ./cmd/stepsecurity-dev-machine-guard
+	GOOS=windows GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS) -H windowsgui" -o $(BINARY)-arm64.exe ./cmd/stepsecurity-dev-machine-guard
 
 build-linux:
 	GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY)-linux ./cmd/stepsecurity-dev-machine-guard

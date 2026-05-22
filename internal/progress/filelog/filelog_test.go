@@ -81,6 +81,54 @@ func TestStartStopWritesFile(t *testing.T) {
 	}
 }
 
+// Regression guard: a broken origErr (closed/invalid handle, as
+// GUI-subsystem agents get under Task Scheduler) must not block the
+// file write. Previously io.MultiWriter aborted the loop, leaving
+// agent.error.log empty despite a successful scan.
+func TestStartWritesFileEvenWhenOrigStderrIsBroken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agent.error.log")
+
+	origStderr := os.Stderr
+	t.Cleanup(func() { os.Stderr = origStderr })
+
+	// Simulate the invalid-handle state by opening then immediately
+	// closing a file, then assigning the closed handle as os.Stderr.
+	// Writes through that handle will return os.ErrClosed — analogous
+	// to ERROR_INVALID_HANDLE on Windows under GUI-subsystem.
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open devnull: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close devnull: %v", err)
+	}
+	os.Stderr = f
+
+	cap, err := Start(path, DefaultMaxBytes)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Write through the now-piped os.Stderr. The data flows: pipe ->
+	// teeLoop -> file (must succeed) + origErr (will fail, ignored).
+	if _, err := fmt.Fprintln(os.Stderr, "hello via broken origErr"); err != nil {
+		t.Fatalf("Fprintln: %v", err)
+	}
+
+	if err := cap.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Contains(data, []byte("hello via broken origErr")) {
+		t.Errorf("file missing payload despite broken origErr: %q", data)
+	}
+}
+
 func TestRotateIfOverCap_OverwritesExistingPrev(t *testing.T) {
 	// Regression guard: on Windows, os.Rename fails when the destination
 	// already exists, so a stale .prev would block all subsequent
