@@ -470,7 +470,7 @@ func TestReadProductInfoVersion(t *testing.T) {
 	mock.SetFile("/test/product-info.json",
 		[]byte(`{"name":"GoLand","version":"2025.1.3","buildNumber":"251.26927.50"}`))
 
-	v := readProductInfoVersion(mock, "/test/product-info.json")
+	v := readJSONVersion(mock, "/test/product-info.json")
 	if v != "2025.1.3" {
 		t.Errorf("expected 2025.1.3, got %s", v)
 	}
@@ -478,7 +478,7 @@ func TestReadProductInfoVersion(t *testing.T) {
 
 func TestReadProductInfoVersion_MissingFile(t *testing.T) {
 	mock := executor.NewMock()
-	v := readProductInfoVersion(mock, "/nonexistent/product-info.json")
+	v := readJSONVersion(mock, "/nonexistent/product-info.json")
 	if v != "unknown" {
 		t.Errorf("expected unknown, got %s", v)
 	}
@@ -488,7 +488,7 @@ func TestReadProductInfoVersion_InvalidJSON(t *testing.T) {
 	mock := executor.NewMock()
 	mock.SetFile("/test/product-info.json", []byte(`not json`))
 
-	v := readProductInfoVersion(mock, "/test/product-info.json")
+	v := readJSONVersion(mock, "/test/product-info.json")
 	if v != "unknown" {
 		t.Errorf("expected unknown, got %s", v)
 	}

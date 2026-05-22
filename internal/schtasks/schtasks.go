@@ -61,22 +61,18 @@ func Install(exec executor.Executor, log *progress.Logger) error {
 		}
 	}
 
-	// Bake STEPSECURITY_HOME into the task command. Admin/INTERACTIVE
-	// tasks (machine-wide installs) anchor at C:\ProgramData\StepSecurity
-	// so the scheduled task and the MSI's earlier write_config agree on
-	// the dir, regardless of which interactive user is logged on at fire
-	// time. Non-admin tasks track paths.Home() (whatever the user's own
-	// install dir resolves to).
-	var stepHome string
-	if exec.IsRoot() {
-		stepHome = `C:\ProgramData\StepSecurity`
-	} else {
-		stepHome = paths.Home()
-	}
+	// Pass --install-dir to the task command. logDir already carries the
+	// canonical resolution (admin → C:\ProgramData\StepSecurity,
+	// non-admin → paths.Home() with a CurrentUser fallback, finally
+	// ProgramData) so we reuse it as STEPSECURITY_HOME. Using paths.Home()
+	// directly here would emit --install-dir="" when HOME/USERPROFILE
+	// aren't resolvable, which the CLI treats as an explicit opt-out
+	// (disables file logging).
+	stepHome := logDir
 
 	taskBinary := resolveTaskBinary(exec, binaryPath)
 	args := buildCreateArgs(taskBinary, stepHome, hours, exec.IsRoot())
-	log.Debug("schtasks create: task_binary=%q agent=%q log_dir=%q step_home=%q hours=%d is_admin=%v", taskBinary, binaryPath, logDir, stepHome, hours, exec.IsRoot())
+	log.Debug("schtasks create: task_binary=%q agent=%q install_dir=%q hours=%d is_admin=%v", taskBinary, binaryPath, stepHome, hours, exec.IsRoot())
 
 	_, stderr, exitCode, err := exec.Run(ctx, "schtasks", args...)
 	log.Debug("schtasks /create: exit_code=%d err=%v", exitCode, err)
