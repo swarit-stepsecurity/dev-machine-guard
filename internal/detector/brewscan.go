@@ -23,14 +23,15 @@ func NewBrewScanner(exec executor.Executor, log *progress.Logger) *BrewScanner {
 
 // ScanFormulae runs `brew list --formula --versions` and returns raw base64-encoded output.
 func (s *BrewScanner) ScanFormulae(ctx context.Context) (model.BrewScanResult, bool) {
-	if _, err := s.exec.LookPath("brew"); err != nil {
-		s.log.Progress("  brew not found in PATH for formulae scan")
+	brew, err := resolveBrewExecutable(s.exec)
+	if err != nil {
+		s.log.Progress("  brew not found for formulae scan")
 		return model.BrewScanResult{}, false
 	}
 
 	s.log.Progress("  Scanning Homebrew formulae...")
 	start := time.Now()
-	stdout, stderr, exitCode, _ := s.exec.RunWithTimeout(ctx, 60*time.Second, "brew", "list", "--formula", "--versions")
+	stdout, stderr, exitCode, _ := s.exec.RunWithTimeout(ctx, 60*time.Second, brew.command, "list", "--formula", "--versions")
 	duration := time.Since(start).Milliseconds()
 
 	errMsg := ""
@@ -59,14 +60,15 @@ func (s *BrewScanner) ScanFormulae(ctx context.Context) (model.BrewScanResult, b
 
 // ScanCasks runs `brew list --cask --versions` and returns raw base64-encoded output.
 func (s *BrewScanner) ScanCasks(ctx context.Context) (model.BrewScanResult, bool) {
-	if _, err := s.exec.LookPath("brew"); err != nil {
-		s.log.Progress("  brew not found in PATH for casks scan")
+	brew, err := resolveBrewExecutable(s.exec)
+	if err != nil {
+		s.log.Progress("  brew not found for casks scan")
 		return model.BrewScanResult{}, false
 	}
 
 	s.log.Progress("  Scanning Homebrew casks...")
 	start := time.Now()
-	stdout, stderr, exitCode, _ := s.exec.RunWithTimeout(ctx, 60*time.Second, "brew", "list", "--cask", "--versions")
+	stdout, stderr, exitCode, _ := s.exec.RunWithTimeout(ctx, 60*time.Second, brew.command, "list", "--cask", "--versions")
 	duration := time.Since(start).Milliseconds()
 
 	errMsg := ""
