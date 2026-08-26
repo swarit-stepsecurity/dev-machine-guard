@@ -61,6 +61,7 @@ type Payload struct {
 	Platform             string                 `json:"platform"`
 	OSVersion            string                 `json:"os_version"`
 	Resources            model.MachineResources `json:"resources"`
+	WSL                  *model.WSLInfo         `json:"wsl,omitempty"`
 	AgentVersion         string                 `json:"agent_version"`
 	CollectedAt          int64                  `json:"collected_at"`
 	NoUserLoggedIn       bool                   `json:"no_user_logged_in"`
@@ -429,6 +430,11 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	phaseCtx, phaseCancel := startPhase(ctx, tracker, "device_info")
 	log.Progress("Gathering device information...")
 	dev := device.Gather(phaseCtx, exec)
+	// WSL detection (Windows host-side; feature-gated until the backend
+	// consumes device.wsl). No-op off Windows.
+	if featuregate.IsEnabled(featuregate.FeatureWSLDetection) {
+		dev.WSL = device.GatherWSL(phaseCtx, exec)
+	}
 	deviceID = dev.SerialNumber
 	// Single source of truth for "is this a real developer or a daemon
 	// context?" — same predicate the payload uses below, so the warning,
@@ -1132,6 +1138,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 		Platform:             dev.Platform,
 		OSVersion:            dev.OSVersion,
 		Resources:            dev.Resources,
+		WSL:                  dev.WSL,
 		AgentVersion:         buildinfo.Version,
 		CollectedAt:          endTime.Unix(),
 		NoUserLoggedIn:       noUserLoggedIn,

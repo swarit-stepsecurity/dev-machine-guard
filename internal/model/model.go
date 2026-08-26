@@ -59,6 +59,47 @@ type Device struct {
 	Platform     string           `json:"platform"`
 	UserIdentity string           `json:"user_identity"`
 	Resources    MachineResources `json:"resources"`
+	// WSL reports Windows Subsystem for Linux on a Windows host. Nil on every
+	// other platform, and nil on Windows unless the WSL-detection feature gate
+	// is on — so `omitempty` drops it entirely rather than emitting a zero
+	// value that a reader could mistake for "scanned, no WSL".
+	WSL *WSLInfo `json:"wsl,omitempty"`
+}
+
+// WSL presence is tri-state. A probe that cannot read the registry (e.g. a
+// SYSTEM-context run whose target user's hive is not loaded) reports
+// WSLPresenceUnknown, never a false WSLPresenceNo.
+const (
+	WSLPresenceYes     = "yes"
+	WSLPresenceNo      = "no"
+	WSLPresenceUnknown = "unknown"
+)
+
+// WSLInfo reports Windows Subsystem for Linux on a Windows host: whether it is
+// present, whether a distribution is currently running, the installed WSL
+// package version, and the registered distributions. Populated only by the
+// Windows agent (WSL detection is a host-side concern — the Linux binary runs
+// *inside* a distro and identifies itself separately).
+type WSLInfo struct {
+	Presence  string      `json:"presence"`  // WSLPresence* — yes | no | unknown
+	Installed bool        `json:"installed"` // WSL runtime service (WslService/LxssManager) present
+	Active    bool        `json:"active"`    // at least one distribution running right now
+	Version   string      `json:"version"`   // installed WSL package version; "unknown" if undeterminable
+	Distros   []WSLDistro `json:"distros,omitempty"`
+}
+
+// WSLDistro is one registered WSL distribution.
+type WSLDistro struct {
+	Name string `json:"name"`
+	// WSLVersion is 1 or 2 (0 if undeterminable), derived from the registry
+	// Flags 0x8 bit — the per-distro Version DWORD is unreliable (it reads 2 on
+	// WSL1 distros). Measured on both: WSL1 → Flags 0x7 → v1, WSL2 → Flags 0xF
+	// → v2 (microsoft/WSL#4251; verified on the metal WSL2 test VM).
+	WSLVersion int    `json:"wsl_version"`
+	Running    bool   `json:"running"`
+	Default    bool   `json:"default"`
+	OwnerSID   string `json:"owner_sid,omitempty"`
+	BasePath   string `json:"base_path,omitempty"`
 }
 
 // MachineResources captures the static hardware capacity of the machine —

@@ -25,6 +25,7 @@ const (
 	FeatureYarnConfigAudit Feature = "yarn-config-audit"
 	FeatureDevicePolicy    Feature = "device-policy"
 	FeatureAgentSkillsScan Feature = "agent-skills-scan"
+	FeatureWSLDetection    Feature = "wsl-detection"
 )
 
 // enabled lists features safe to ship today. Uncomment a line once its
@@ -38,6 +39,11 @@ var enabled = map[Feature]bool{
 	FeatureYarnConfigAudit: true,
 	FeatureDevicePolicy:    true,
 	FeatureAgentSkillsScan: true,
+	// Backend consumes device.wsl as of agent-api branch swarit/feat/wt/wsl-v1
+	// (DeviceTelemetry.WSL ingest + RegisteredDevice.WSL denormalization).
+	// Safe ahead of the backend deploy: older backends ignore the unknown
+	// field and still archive the full telemetry blob.
+	FeatureWSLDetection: true,
 }
 
 var override bool
