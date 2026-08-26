@@ -108,8 +108,8 @@ func (d *FrameworkDetector) getVersion(ctx context.Context, spec frameworkSpec, 
 		d.log.Debug("skipping %s version probe: GUI application, --version would launch it", binaryPath)
 		return "unknown"
 	}
-	if !execguard.SafeToExec(ctx, d.exec, binaryPath) {
-		d.log.Warn("skipping %s version probe: quarantined and rejected by Gatekeeper", binaryPath)
+	if safe, reason := execguard.SafeToExec(ctx, d.exec, binaryPath); !safe {
+		d.log.Warn("skipping %s version probe: %s", binaryPath, reason)
 		return "unknown"
 	}
 	d.log.Progress("exec fallback: running %s --version (no metadata version source)", binaryPath)

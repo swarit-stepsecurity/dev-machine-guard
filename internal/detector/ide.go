@@ -600,7 +600,7 @@ const maxLinuxInstallRootDepth = 3
 // so on Linux it refuses an Electron app's entry point and on macOS a
 // Gatekeeper-rejected quarantined binary.
 func runVersionCmd(ctx context.Context, exec executor.Executor, binary, flag string) string {
-	if !execguard.SafeToExec(ctx, exec, binary) {
+	if safe, _ := execguard.SafeToExec(ctx, exec, binary); !safe {
 		return "unknown"
 	}
 	stdout, _, _, err := exec.RunWithTimeout(ctx, 10*time.Second, binary, flag)

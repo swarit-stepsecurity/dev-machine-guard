@@ -29,7 +29,11 @@ import (
 const probeTimeout = 5 * time.Second
 
 // SafeToExec reports whether launching binaryPath is safe from a
-// GUI-popup perspective. Windows always returns true.
+// GUI-popup perspective, and when it is not, why. Windows always returns true.
+//
+// The reason is returned rather than left to callers to describe: they log it,
+// and the cause is platform-specific, so a hardcoded message goes stale the
+// moment a platform is added. It is "" when safe.
 //
 // On macOS it resolves symlinks, then checks the binary and its containing
 // directory for the com.apple.quarantine attribute (cask installs quarantine
@@ -45,9 +49,9 @@ const probeTimeout = 5 * time.Second
 //
 // On Linux it answers whether the binary is an Electron app's GUI entry point,
 // purely from stats.
-func SafeToExec(ctx context.Context, exec executor.Executor, binaryPath string) bool {
+func SafeToExec(ctx context.Context, exec executor.Executor, binaryPath string) (bool, string) {
 	if binaryPath == "" {
-		return true
+		return true, ""
 	}
 	resolved, err := exec.EvalSymlinks(binaryPath)
 	if err != nil || resolved == "" {
@@ -56,15 +60,21 @@ func SafeToExec(ctx context.Context, exec executor.Executor, binaryPath string) 
 
 	switch exec.GOOS() {
 	case model.PlatformLinux:
-		return !isElectronAppEntryPoint(exec, resolved)
+		if isElectronAppEntryPoint(exec, resolved) {
+			return false, "it is a packaged Electron app's entry point, which would open its window instead of printing a version"
+		}
+		return true, ""
 	case model.PlatformDarwin:
 		if !isQuarantined(ctx, exec, resolved) && !isQuarantined(ctx, exec, parentDir(resolved)) {
-			return true
+			return true, ""
 		}
 		_, _, exitCode, err := exec.RunWithTimeout(ctx, probeTimeout, "/usr/sbin/spctl", "--assess", "--type", "execute", resolved)
-		return err == nil && exitCode == 0
+		if err == nil && exitCode == 0 {
+			return true, ""
+		}
+		return false, "it is quarantined and Gatekeeper rejected it"
 	default:
-		return true
+		return true, ""
 	}
 }
 

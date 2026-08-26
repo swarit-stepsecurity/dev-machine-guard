@@ -2,6 +2,7 @@ package execguard
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func TestSafeToExec(t *testing.T) {
 		mock := executor.NewMock()
 		mock.SetSymlink(binary, resolved)
 		// xattr unstubbed -> errors -> attribute absent.
-		if !SafeToExec(context.Background(), mock, binary) {
+		if safe, _ := SafeToExec(context.Background(), mock, binary); !safe {
 			t.Error("unquarantined binary should be safe to exec")
 		}
 	})
@@ -35,7 +36,7 @@ func TestSafeToExec(t *testing.T) {
 		mock.SetSymlink(binary, resolved)
 		quarantineStub(mock, resolved)
 		mock.SetCommand("", "rejected", 3, "/usr/sbin/spctl", spctlArgs...)
-		if SafeToExec(context.Background(), mock, binary) {
+		if safe, _ := SafeToExec(context.Background(), mock, binary); safe {
 			t.Error("quarantined + Gatekeeper-rejected binary must not be exec'd")
 		}
 	})
@@ -45,7 +46,7 @@ func TestSafeToExec(t *testing.T) {
 		mock.SetSymlink(binary, resolved)
 		quarantineStub(mock, resolved)
 		mock.SetCommand("accepted", "", 0, "/usr/sbin/spctl", spctlArgs...)
-		if !SafeToExec(context.Background(), mock, binary) {
+		if safe, _ := SafeToExec(context.Background(), mock, binary); !safe {
 			t.Error("quarantined but notarized (spctl-accepted) binary should be safe")
 		}
 	})
@@ -56,7 +57,7 @@ func TestSafeToExec(t *testing.T) {
 		// Binary itself clean (partially-cleared install), containing dir quarantined.
 		quarantineStub(mock, "/opt/homebrew/Caskroom/cursor-cli/2026.03.11")
 		mock.SetCommand("", "rejected", 3, "/usr/sbin/spctl", spctlArgs...)
-		if SafeToExec(context.Background(), mock, binary) {
+		if safe, _ := SafeToExec(context.Background(), mock, binary); safe {
 			t.Error("quarantined install dir must trigger assessment and reject")
 		}
 	})
@@ -66,7 +67,7 @@ func TestSafeToExec(t *testing.T) {
 		mock.SetSymlink(binary, resolved)
 		quarantineStub(mock, resolved)
 		// spctl unstubbed -> errors -> treat as rejected.
-		if SafeToExec(context.Background(), mock, binary) {
+		if safe, _ := SafeToExec(context.Background(), mock, binary); safe {
 			t.Error("quarantined binary with failing spctl must not be exec'd")
 		}
 	})
@@ -76,14 +77,14 @@ func TestSafeToExec(t *testing.T) {
 			mock := executor.NewMock()
 			mock.SetGOOS(goos)
 			quarantineStub(mock, binary)
-			if !SafeToExec(context.Background(), mock, binary) {
+			if safe, _ := SafeToExec(context.Background(), mock, binary); !safe {
 				t.Errorf("GOOS=%s: quarantine is a macOS concept; must be safe", goos)
 			}
 		}
 	})
 
 	t.Run("empty path is safe", func(t *testing.T) {
-		if !SafeToExec(context.Background(), executor.NewMock(), "") {
+		if safe, _ := SafeToExec(context.Background(), executor.NewMock(), ""); !safe {
 			t.Error("empty path should be a no-op (safe)")
 		}
 	})
@@ -159,7 +160,7 @@ func TestSafeToExec_Linux(t *testing.T) {
 			if tt.symlink != "" {
 				mock.SetSymlink(tt.binary, tt.symlink)
 			}
-			if got := SafeToExec(context.Background(), mock, tt.binary); got != tt.want {
+			if got, _ := SafeToExec(context.Background(), mock, tt.binary); got != tt.want {
 				t.Errorf("SafeToExec(%q) = %v, want %v", tt.binary, got, tt.want)
 			}
 		})
@@ -172,7 +173,7 @@ func TestSafeToExec_LinuxLaunchesNothing(t *testing.T) {
 	mock.SetSymlink("/usr/bin/lm-studio", "/opt/LM Studio/lm-studio")
 	trap := &trapExecutor{Mock: mock, t: t}
 
-	if SafeToExec(context.Background(), trap, "/usr/bin/lm-studio") {
+	if safe, _ := SafeToExec(context.Background(), trap, "/usr/bin/lm-studio"); safe {
 		t.Error("Electron app entry point must be refused")
 	}
 }
@@ -196,7 +197,49 @@ func TestSafeToExec_WindowsAlwaysSafe(t *testing.T) {
 	mock := executor.NewMock()
 	mock.SetGOOS("windows")
 	mock.SetFile(`C:\Program Files\LM Studio\resources\app.asar`, []byte{})
-	if !SafeToExec(context.Background(), mock, `C:\Program Files\LM Studio\LM Studio.exe`) {
+	if safe, _ := SafeToExec(context.Background(), mock, `C:\Program Files\LM Studio\LM Studio.exe`); !safe {
 		t.Error("Windows must be unaffected")
 	}
+}
+
+// The refusal reason is returned rather than written at each call site, because
+// ten callers log it and a hardcoded string went stale the moment Linux gained
+// a verdict — every Linux refusal claimed Gatekeeper quarantine.
+func TestSafeToExec_ReasonMatchesPlatform(t *testing.T) {
+	t.Run("linux names the Electron app, not Gatekeeper", func(t *testing.T) {
+		mock := linuxMock("/opt/LM Studio/resources/app.asar")
+		mock.SetSymlink("/usr/bin/lm-studio", "/opt/LM Studio/lm-studio")
+
+		safe, reason := SafeToExec(context.Background(), mock, "/usr/bin/lm-studio")
+		if safe {
+			t.Fatal("expected refusal")
+		}
+		if !strings.Contains(reason, "Electron") {
+			t.Errorf("reason = %q, want it to name the Electron app", reason)
+		}
+		if strings.Contains(reason, "Gatekeeper") || strings.Contains(reason, "quarantine") {
+			t.Errorf("reason = %q, must not claim macOS quarantine on linux", reason)
+		}
+	})
+
+	t.Run("darwin names Gatekeeper", func(t *testing.T) {
+		mock := executor.NewMock()
+		mock.SetSymlink(binary, resolved)
+		quarantineStub(mock, resolved)
+		mock.SetCommand("", "rejected", 3, "/usr/sbin/spctl", "--assess", "--type", "execute", resolved)
+
+		safe, reason := SafeToExec(context.Background(), mock, binary)
+		if safe {
+			t.Fatal("expected refusal")
+		}
+		if !strings.Contains(reason, "Gatekeeper") {
+			t.Errorf("reason = %q, want it to name Gatekeeper", reason)
+		}
+	})
+
+	t.Run("no reason when safe", func(t *testing.T) {
+		if safe, reason := SafeToExec(context.Background(), linuxMock(), "/usr/bin/ollama"); !safe || reason != "" {
+			t.Errorf("SafeToExec = (%v, %q), want (true, \"\")", safe, reason)
+		}
+	})
 }
