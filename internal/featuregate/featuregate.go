@@ -39,10 +39,9 @@ var enabled = map[Feature]bool{
 	FeatureYarnConfigAudit: true,
 	FeatureDevicePolicy:    true,
 	FeatureAgentSkillsScan: true,
-	// Backend consumes device.wsl as of agent-api branch swarit/feat/wt/wsl-v1
-	// (DeviceTelemetry.WSL ingest + RegisteredDevice.WSL denormalization).
-	// Safe ahead of the backend deploy: older backends ignore the unknown
-	// field and still archive the full telemetry blob.
+	// Safe to ship ahead of the backend: a backend that does not yet consume
+	// device.wsl ignores the unknown field and still archives the full
+	// telemetry blob.
 	FeatureWSLDetection: true,
 }
 
