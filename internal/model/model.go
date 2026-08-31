@@ -91,6 +91,13 @@ type WSLInfo struct {
 // WSLDistro is one registered WSL distribution.
 type WSLDistro struct {
 	Name string `json:"name"`
+	// DistroID is the distribution's registry key name, a GUID, and the only
+	// stable per-distro identifier. It survives restarts and renames (renaming
+	// rewrites DistributionName only — this WSL build has no `--rename` command
+	// at all) and changes on unregister/re-import, which genuinely is a new
+	// environment. Never derive it from BasePath: only store-installed distros
+	// carry the GUID in their path, an imported one reads e.g. C:\wsl1\Alpine.
+	DistroID string `json:"distro_id,omitempty"`
 	// WSLVersion is 1 or 2 (0 if undeterminable), derived from the registry
 	// Flags 0x8 bit — the per-distro Version DWORD is unreliable (it reads 2 on
 	// WSL1 distros). Measured on both: WSL1 → Flags 0x7 → v1, WSL2 → Flags 0xF
@@ -100,6 +107,12 @@ type WSLDistro struct {
 	Default    bool   `json:"default"`
 	OwnerSID   string `json:"owner_sid,omitempty"`
 	BasePath   string `json:"base_path,omitempty"`
+	// DefaultUID is the uid `wsl -d <name>` runs as, read from the registry
+	// DefaultUid value. Distinguishing 0 from absent matters: 0 means the
+	// distro has no non-root user, so its home holds nothing worth scanning,
+	// whereas nil means we could not read the value. Never scan as root
+	// explicitly — root's home is empty and would read as a clean machine.
+	DefaultUID *uint32 `json:"default_uid,omitempty"`
 }
 
 // MachineResources captures the static hardware capacity of the machine —

@@ -4,10 +4,12 @@ package device
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/step-security/dev-machine-guard/internal/executor"
 	"github.com/step-security/dev-machine-guard/internal/model"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -75,6 +77,13 @@ func readLxssForSID(sid string) []model.WSLDistro {
 		name, _, _ := dk.GetStringValue("DistributionName")
 		flags, _, _ := dk.GetIntegerValue("Flags")
 		basePath, _, _ := dk.GetStringValue("BasePath")
+		// DefaultUid is absent on some registrations, and 0 (root) is a
+		// meaningful answer — so read the error rather than defaulting to 0.
+		var defaultUID *uint32
+		if uid, _, err := dk.GetIntegerValue("DefaultUid"); err == nil {
+			u := uint32(uid)
+			defaultUID = &u
+		}
 		dk.Close()
 
 		if name == "" {
@@ -82,10 +91,12 @@ func readLxssForSID(sid string) []model.WSLDistro {
 		}
 		out = append(out, model.WSLDistro{
 			Name:       name,
+			DistroID:   guid,
 			WSLVersion: wslVersionFromFlags(flags),
 			Default:    guid == defaultGUID,
 			OwnerSID:   sid,
 			BasePath:   basePath,
+			DefaultUID: defaultUID,
 		})
 	}
 	return out
@@ -103,6 +114,54 @@ func wslServiceInstalled(_ executor.Executor) (bool, bool) {
 		}
 	}
 	return false, true
+}
+
+// wslServiceRunning reports whether either WSL runtime service is currently in
+// the RUNNING state, without spawning anything.
+//
+// It asks for SC_MANAGER_CONNECT on the manager and SERVICE_QUERY_STATUS on the
+// service — exactly the rights the default WSL service ACL grants Interactive
+// Users (verified from its SDDL), so this works for a non-admin agent. It
+// deliberately does not use mgr.Connect(), which requests full access and would
+// need admin.
+//
+// known is false when we could not tell: the SCM would not open, or a service
+// that may exist could not be queried. A service that is genuinely absent
+// (ERROR_SERVICE_DOES_NOT_EXIST) is a conclusive "not running", not an unknown.
+func wslServiceRunning(_ executor.Executor) (bool, bool) {
+	scm, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return false, false
+	}
+	defer windows.CloseServiceHandle(scm)
+
+	known := true
+	for _, svc := range wslServiceNames {
+		name, err := windows.UTF16PtrFromString(svc)
+		if err != nil {
+			known = false
+			continue
+		}
+		h, err := windows.OpenService(scm, name, windows.SERVICE_QUERY_STATUS)
+		if err != nil {
+			// Absent is an answer; anything else means we could not look.
+			if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+				known = false
+			}
+			continue
+		}
+		var status windows.SERVICE_STATUS
+		err = windows.QueryServiceStatus(h, &status)
+		windows.CloseServiceHandle(h)
+		if err != nil {
+			known = false
+			continue
+		}
+		if status.CurrentState == windows.SERVICE_RUNNING {
+			return true, true
+		}
+	}
+	return false, known
 }
 
 // wslPackageVersion reads the installed WSL version from the Uninstall registry

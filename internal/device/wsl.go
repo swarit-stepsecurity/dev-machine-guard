@@ -81,9 +81,9 @@ func gatherWSLWindows(ctx context.Context, exec executor.Executor) *model.WSLInf
 		info.Version = v
 	}
 
-	// "Actively used" — only worth a subprocess when WSL is installed and at
-	// least one distro is registered.
-	if installed && len(distros) > 0 {
+	// "Actively used" — only worth a subprocess when WSL is installed, at least
+	// one distro is registered, and a WSL service is actually running.
+	if installed && len(distros) > 0 && wslMayHaveRunningDistro(exec) {
 		running := wslRunningDistros(ctx, exec)
 		for i := range info.Distros {
 			if running[info.Distros[i].Name] {
@@ -94,6 +94,23 @@ func gatherWSLWindows(ctx context.Context, exec executor.Executor) *model.WSLInf
 	}
 
 	return info
+}
+
+// wslMayHaveRunningDistro reports whether the running-distro probe is worth its
+// subprocess. It answers from service state alone, via a native query that
+// spawns nothing: the WSL services manage every distro, so if neither is
+// running then nothing can be.
+//
+// This is not just about saving a process. `wsl.exe --list --running --quiet`
+// *starts* WslService when it is stopped (measured: Stopped before, Running
+// after, empty output) — so on a machine where WSL is installed but unused
+// since boot, probing wakes a Windows service to learn that nothing is running.
+//
+// An unknown service state answers true: we would rather pay for the probe than
+// under-report "active".
+func wslMayHaveRunningDistro(exec executor.Executor) bool {
+	running, known := wslServiceRunning(exec)
+	return !known || running
 }
 
 // wslRunningDistros returns the set of distribution names WSL reports as

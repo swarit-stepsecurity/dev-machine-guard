@@ -84,9 +84,11 @@ func wslRegistryInventory(exec executor.Executor) ([]model.WSLDistro, bool) {
 		}
 		distros = append(distros, model.WSLDistro{
 			Name:       name,
+			DistroID:   guid,
 			WSLVersion: wslVersionFromFlags(parseRegDWORD(s.values["Flags"])),
 			Default:    guid == defaultGUID,
 			BasePath:   s.values["BasePath"],
+			DefaultUID: parseRegDWORDOpt(s.values["DefaultUid"]),
 		})
 	}
 	sortDistros(distros)
@@ -126,6 +128,31 @@ func wslPackageVersion(_ context.Context, exec executor.Executor) string {
 		}
 	}
 	return ""
+}
+
+// wslServiceRunning has no exec-based counterpart worth having: `sc query` would
+// be exactly the subprocess the gate exists to avoid. Off Windows it reports
+// "unknown", which makes the caller behave as it did before the gate and still
+// run the probe.
+func wslServiceRunning(_ executor.Executor) (bool, bool) { return false, false }
+
+// parseRegDWORDOpt is parseRegDWORD for values whose absence must stay
+// distinguishable from zero — DefaultUid 0 means root, not "unreadable".
+func parseRegDWORDOpt(s string) *uint32 {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	raw := strings.TrimSpace(s)
+	base, digits := 10, raw
+	if strings.HasPrefix(raw, "0x") || strings.HasPrefix(raw, "0X") {
+		base, digits = 16, raw[2:]
+	}
+	v, err := strconv.ParseUint(digits, base, 32)
+	if err != nil {
+		return nil
+	}
+	u := uint32(v)
+	return &u
 }
 
 // parseRegDWORD reads a reg.exe REG_DWORD literal ("0x7") to a uint64. 0 on error.
