@@ -53,6 +53,14 @@ type Config struct {
 	// reach the downloadable log without this.
 	GateProceedReason string
 
+	// WSLScanEnabled and WSLScanReason are populated at runtime (not CLI flags)
+	// from the run-config check-in's wsl_directive. They gate scanning INSIDE
+	// WSL distros — a tenant-wide switch with no per-device granularity. Both
+	// stay zero on every path that never reached a backend answer, so distro
+	// scanning fails closed; host-side WSL detection does not consult them.
+	WSLScanEnabled bool
+	WSLScanReason  string
+
 	// HooksAgent is the --agent value on `hooks install` / `hooks uninstall`;
 	// "" means "every detected agent".
 	HooksAgent string

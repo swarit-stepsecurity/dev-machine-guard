@@ -679,6 +679,10 @@ func gateSkipsRun(exec executor.Executor, log *progress.Logger, cfg *cli.Config)
 		// Carry the decision into telemetry.Run so it echoes a line inside the
 		// captured execution log (the gate runs before log capture starts).
 		cfg.GateProceedReason = res.Reason
+		// Carry the tenant's WSL switch into the run. Only set on the proceed
+		// path: a skipped run scans nothing at all.
+		cfg.WSLScanEnabled = res.WSL.Enabled
+		cfg.WSLScanReason = res.WSL.Reason
 		return false
 	}
 	if res.Detail != "" {
