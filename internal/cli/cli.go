@@ -61,6 +61,15 @@ type Config struct {
 	WSLScanEnabled bool
 	WSLScanReason  string
 
+	// WSLHostSerial and WSLDistroID identify this run as happening INSIDE a WSL
+	// distribution, and are passed by the Windows host that triggered it
+	// (--wsl-host-serial, --wsl-distro-id). A distro cannot discover either for
+	// itself. When both are set the agent derives a stable device id from them,
+	// because a distro's own identity is unusable: it inherits the host's
+	// hostname, and a minimal or WSL1 distro has no machine-id.
+	WSLHostSerial string
+	WSLDistroID   string
+
 	// HooksAgent is the --agent value on `hooks install` / `hooks uninstall`;
 	// "" means "every detected agent".
 	HooksAgent string
@@ -306,6 +315,22 @@ func Parse(args []string) (*Config, error) {
 			cfg.Verbose = true
 		case arg == "--override-gate":
 			cfg.OverrideGate = true
+		case strings.HasPrefix(arg, "--wsl-host-serial="):
+			cfg.WSLHostSerial = strings.TrimPrefix(arg, "--wsl-host-serial=")
+		case arg == "--wsl-host-serial":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--wsl-host-serial requires a value")
+			}
+			cfg.WSLHostSerial = args[i]
+		case strings.HasPrefix(arg, "--wsl-distro-id="):
+			cfg.WSLDistroID = strings.TrimPrefix(arg, "--wsl-distro-id=")
+		case arg == "--wsl-distro-id":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--wsl-distro-id requires a value")
+			}
+			cfg.WSLDistroID = args[i]
 		case arg == "--force-scan":
 			cfg.ForceScan = true
 		case strings.HasPrefix(arg, "--rules-file="):

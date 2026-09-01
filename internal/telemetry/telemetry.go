@@ -62,6 +62,7 @@ type Payload struct {
 	OSVersion            string                 `json:"os_version"`
 	Resources            model.MachineResources `json:"resources"`
 	WSL                  *model.WSLInfo         `json:"wsl,omitempty"`
+	WSLGuest             *model.WSLGuest        `json:"wsl_guest,omitempty"`
 	AgentVersion         string                 `json:"agent_version"`
 	CollectedAt          int64                  `json:"collected_at"`
 	NoUserLoggedIn       bool                   `json:"no_user_logged_in"`
@@ -1127,18 +1128,31 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 			scanStateFullSync)
 	}
 
+	// A run inside a WSL distro identifies itself by its host + distro pair.
+	// Its own identity is unusable: the hostname is the Windows host's, and a
+	// minimal or WSL1 distro has no machine-id, so dev.SerialNumber reads
+	// "unknown" and every such distro would collide on one record.
+	wslGuest := wslGuestFromConfig(cfg)
+	deviceIdentity := dev.SerialNumber
+	if wslGuest != nil {
+		deviceIdentity = wslGuestDeviceID(wslGuest.HostDeviceID, wslGuest.DistroID)
+		log.Progress("WSL guest: distro %s on host %s — device id %s",
+			wslGuest.DistroID, wslGuest.HostDeviceID, deviceIdentity)
+	}
+
 	// Build payload
 	payload := &Payload{
 		PayloadSchemaVersion: schemaVersion,
 		CustomerID:           config.CustomerID,
-		DeviceID:             dev.SerialNumber,
-		SerialNumber:         dev.SerialNumber,
+		DeviceID:             deviceIdentity,
+		SerialNumber:         deviceIdentity,
 		UserIdentity:         dev.UserIdentity,
 		Hostname:             dev.Hostname,
 		Platform:             dev.Platform,
 		OSVersion:            dev.OSVersion,
 		Resources:            dev.Resources,
 		WSL:                  dev.WSL,
+		WSLGuest:             wslGuest,
 		AgentVersion:         buildinfo.Version,
 		CollectedAt:          endTime.Unix(),
 		NoUserLoggedIn:       noUserLoggedIn,

@@ -88,6 +88,19 @@ type WSLInfo struct {
 	Distros   []WSLDistro `json:"distros,omitempty"`
 }
 
+// WSLGuest identifies this agent as running INSIDE a WSL distribution and names
+// the Windows host it belongs to. Set only from the flags the host passes at
+// trigger time (--wsl-host-serial / --wsl-distro-id): a distro cannot discover
+// either value for itself without depending on Windows interop.
+//
+// It exists because a distro has no usable identity of its own — it inherits the
+// host's hostname, and a minimal or WSL1 distro has no /etc/machine-id at all.
+// The backend pairs on DistroID against the host's own reported distro list.
+type WSLGuest struct {
+	HostDeviceID string `json:"host_device_id"`
+	DistroID     string `json:"distro_id"`
+}
+
 // WSLDistro is one registered WSL distribution.
 type WSLDistro struct {
 	Name string `json:"name"`
