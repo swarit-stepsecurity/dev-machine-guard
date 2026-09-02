@@ -28,6 +28,13 @@ type Executor interface {
 	RunInDir(ctx context.Context, dir string, timeout time.Duration, name string, args ...string) (stdout, stderr string, exitCode int, err error)
 	// RunAsUser runs a shell command as a specific user (for root -> user delegation).
 	RunAsUser(ctx context.Context, username, command string) (string, error)
+	// StartDetached launches a command and returns as soon as it has started,
+	// without waiting for it to finish and without tying its lifetime to this
+	// process. Used to trigger a scan inside a WSL distribution: the scan
+	// outlives the run that started it, and its own agent reports the result.
+	// The error covers failure to *start* only — anything the child does
+	// afterwards is invisible here by design.
+	StartDetached(name string, args ...string) error
 	// LookPath searches for an executable in PATH.
 	LookPath(name string) (string, error)
 	// FileExists checks if a file exists and is not a directory.
@@ -81,6 +88,21 @@ type Real struct {
 }
 
 func NewReal() *Real { return &Real{} }
+
+// StartDetached starts the process and lets it go. It deliberately does not
+// Wait: the child must survive this process exiting, which on Windows it does
+// — a scheduled task's spawned child keeps running after the task instance
+// ends (measured). Release drops our handle so nothing here holds the child.
+func (r *Real) StartDetached(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if cmd.Process == nil {
+		return nil
+	}
+	return cmd.Process.Release()
+}
 
 func (r *Real) Run(ctx context.Context, name string, args ...string) (string, string, int, error) {
 	cmd := exec.CommandContext(ctx, name, args...)

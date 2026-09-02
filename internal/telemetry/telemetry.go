@@ -459,6 +459,18 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	}
 	endPhase(phaseCtx, phaseCancel, tracker, log, "device_info")
 
+	// Trigger a scan inside each running WSL distribution. Gated on the
+	// tenant's wsl_directive (fetched by the run gate before this run) and on
+	// the host having reported WSL at all, so a machine without it costs
+	// nothing. Launch-only: the distros report their own findings, so this
+	// phase never waits for a scan and cannot extend the run.
+	if cfg != nil && cfg.WSLScanEnabled {
+		wslCtx, wslCancel := startPhase(ctx, tracker, "wsl_scan")
+		log.Progress("Triggering WSL distribution scans (%s)...", cfg.WSLScanReason)
+		triggerWSLScans(exec, log, cfg, &dev)
+		endPhase(wslCtx, wslCancel, tracker, log, "wsl_scan")
+	}
+
 	// Per-device scan state for the delta-upload protocol. Gated OFF by
 	// default (config.UseLegacyPackageScan defaults true) until the agent-api
 	// side ships. Resolution, in order:

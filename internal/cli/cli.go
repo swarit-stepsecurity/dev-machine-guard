@@ -70,6 +70,11 @@ type Config struct {
 	WSLHostSerial string
 	WSLDistroID   string
 
+	// ConfigFile is --config: the exact config.json to read. Applied by a
+	// pre-scan of argv before config.Load(), so this field is informational
+	// once parsing is done.
+	ConfigFile string
+
 	// HooksAgent is the --agent value on `hooks install` / `hooks uninstall`;
 	// "" means "every detected agent".
 	HooksAgent string
@@ -315,6 +320,14 @@ func Parse(args []string) (*Config, error) {
 			cfg.Verbose = true
 		case arg == "--override-gate":
 			cfg.OverrideGate = true
+		case strings.HasPrefix(arg, "--config="):
+			cfg.ConfigFile = strings.TrimPrefix(arg, "--config=")
+		case arg == "--config":
+			i++
+			if i >= len(args) {
+				return nil, fmt.Errorf("--config requires a file path argument")
+			}
+			cfg.ConfigFile = args[i]
 		case strings.HasPrefix(arg, "--wsl-host-serial="):
 			cfg.WSLHostSerial = strings.TrimPrefix(arg, "--wsl-host-serial=")
 		case arg == "--wsl-host-serial":
@@ -603,4 +616,23 @@ Configuration:
 		name, name, name, name, name, name, name, name,
 		name, name, name,
 		buildinfo.AgentURL)
+}
+
+// ConfigPathFromArgs pre-scans argv for --config so main can pin the config
+// path before config.Load() runs. Parse() happens after Load(), and Load()
+// keeps whatever it read first, so the flag cannot be honoured any later.
+// Deliberately forgiving: an unparseable argv is Parse()'s problem to report,
+// not this helper's.
+func ConfigPathFromArgs(args []string) string {
+	for i, arg := range args {
+		switch {
+		case strings.HasPrefix(arg, "--config="):
+			return strings.TrimPrefix(arg, "--config=")
+		case arg == "--config":
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+		}
+	}
+	return ""
 }

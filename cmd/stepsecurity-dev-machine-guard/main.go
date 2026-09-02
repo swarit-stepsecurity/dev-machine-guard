@@ -74,6 +74,11 @@ func main() {
 	}
 
 	// Load persisted config (~/.stepsecurity/config.json) before parsing CLI
+	// --config must be honoured before Load(), which runs ahead of flag
+	// parsing and keeps the first values it reads.
+	if p := cli.ConfigPathFromArgs(os.Args[1:]); p != "" {
+		config.SetFileOverride(p)
+	}
 	config.Load()
 
 	cfg, err := cli.Parse(os.Args[1:])
