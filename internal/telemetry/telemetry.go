@@ -36,6 +36,7 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/schedinfo"
 	"github.com/step-security/dev-machine-guard/internal/state"
 	"github.com/step-security/dev-machine-guard/internal/tcc"
+	"github.com/step-security/dev-machine-guard/internal/wslguest"
 )
 
 // s3UploadBackoffUnit is multiplied by attempt-number to compute the
@@ -1147,7 +1148,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	wslGuest := wslGuestFromConfig(cfg)
 	deviceIdentity := dev.SerialNumber
 	if wslGuest != nil {
-		deviceIdentity = wslGuestDeviceID(wslGuest.HostDeviceID, wslGuest.DistroID)
+		deviceIdentity = wslguest.DeviceID(wslGuest.HostDeviceID, wslGuest.DistroID)
 		log.Progress("WSL guest: distro %s on host %s — device id %s",
 			wslGuest.DistroID, wslGuest.HostDeviceID, deviceIdentity)
 	}

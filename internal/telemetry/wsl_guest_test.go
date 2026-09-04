@@ -31,29 +31,6 @@ func TestWSLGuestFromConfig(t *testing.T) {
 	}
 }
 
-// TestWSLGuestDeviceID_StableAndUnique: re-scans must converge on one record,
-// and two distros on the same host must never collide — which they would if we
-// used the hostname they all share.
-func TestWSLGuestDeviceID_StableAndUnique(t *testing.T) {
-	a := wslGuestDeviceID("host-1", "{aaa}")
-	if a != wslGuestDeviceID("host-1", "{aaa}") {
-		t.Error("not deterministic — a re-scan would create a second device record")
-	}
-	if a == wslGuestDeviceID("host-1", "{bbb}") {
-		t.Error("two distros on one host collided")
-	}
-	if a == wslGuestDeviceID("host-2", "{aaa}") {
-		t.Error("the same distro id on two hosts collided")
-	}
-	// Case differences in a Windows serial or GUID must not fork the identity.
-	if a != wslGuestDeviceID("HOST-1", "{AAA}") {
-		t.Error("case change forked the device id")
-	}
-	if len(a) != 36 || strings.Count(a, "-") != 4 {
-		t.Errorf("device id %q is not uuid-shaped", a)
-	}
-}
-
 // TestPayload_WSLGuest_WireContract locks the shape agent-api's
 // ddbmodels.DeviceWSLGuest unmarshals; a tag drift silently unpairs every guest.
 func TestPayload_WSLGuest_WireContract(t *testing.T) {

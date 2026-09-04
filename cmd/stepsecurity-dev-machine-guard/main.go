@@ -36,6 +36,7 @@ import (
 	"github.com/step-security/dev-machine-guard/internal/tcc"
 	"github.com/step-security/dev-machine-guard/internal/telemetry"
 	"github.com/step-security/dev-machine-guard/internal/winproc"
+	"github.com/step-security/dev-machine-guard/internal/wslguest"
 )
 
 // auditSkipper builds a TCC skipper if scanning into TCC-protected dirs is
@@ -694,7 +695,10 @@ func findLegacyLeftovers(legacy string) []string {
 // gate failure returns false (fail-open), so this can never suppress a scan
 // on error.
 func gateSkipsRun(exec executor.Executor, log *progress.Logger, cfg *cli.Config) bool {
-	res := rungate.Evaluate(context.Background(), exec, log, cfg.ForceScan)
+	// A run inside a WSL distro gates under the identity its host gave it, not
+	// under the distro's own (absent) serial.
+	res := rungate.Evaluate(context.Background(), exec, log, cfg.ForceScan,
+		wslguest.DeviceID(cfg.WSLHostSerial, cfg.WSLDistroID))
 	if !res.Skip {
 		log.Progress("Run gate: proceeding with this run (%s)", res.Reason)
 		// Carry the decision into telemetry.Run so it echoes a line inside the

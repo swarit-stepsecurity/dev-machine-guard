@@ -78,6 +78,14 @@ func TestTriggerWSLScans_OnlyRunningDistros(t *testing.T) {
 	if strings.Contains(call, " -u ") {
 		t.Errorf("spawn must not pass -u: %s", call)
 	}
+	// The guest gates itself under the derived id we hand it, so forcing the
+	// scan would defeat the tenant's cadence for every distro.
+	if strings.Contains(call, "--force-scan") {
+		t.Errorf("spawn must not force the guest's scan: %s", call)
+	}
+	if !strings.Contains(call, "--config=") {
+		t.Errorf("spawn must tell the guest where the tenant config is: %s", call)
+	}
 }
 
 func TestTriggerWSLScans_Skips(t *testing.T) {

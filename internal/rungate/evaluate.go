@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/step-security/dev-machine-guard/internal/config"
@@ -38,7 +39,12 @@ type Result struct {
 // wakeup skips on the directive before the run ever tries the lock, and a due
 // wakeup that collides with a running scan is left to telemetry.Run's
 // lock.Acquire so it reports the contention as before.
-func Evaluate(ctx context.Context, exec executor.Executor, log *progress.Logger, forceScan bool) Result {
+// guestDeviceID, when non-empty, is the identity of an agent running inside a
+// WSL distribution, derived by the host that triggered it. It must be used in
+// preference to any local probe: a distro's own serial is its machine-id — or
+// "unknown" on a minimal or WSL1 distro — so gating on it would check in
+// against the wrong device record, or none.
+func Evaluate(ctx context.Context, exec executor.Executor, log *progress.Logger, forceScan bool, guestDeviceID string) Result {
 	in := Inputs{
 		ForceScan:  forceScan || os.Getenv("STEPSEC_FORCE_SCAN") == "1",
 		KillSwitch: os.Getenv("STEPSEC_DISABLE_RUN_GATE") == "1",
@@ -58,15 +64,21 @@ func Evaluate(ctx context.Context, exec executor.Executor, log *progress.Logger,
 		return Result{Skip: false, Reason: Decide(in).Reason, WSL: wslWithOverride(WSLDirective{})}
 	}
 
-	// Device id: cached from a prior run when possible, else a bounded local
-	// probe. Without a real serial the backend can't be asked anything
-	// meaningful — fail open rather than gate on a bogus id.
+	// Device id: the guest identity when we were given one, else cached from a
+	// prior run, else a bounded local probe. Without a real id the backend
+	// can't be asked anything meaningful — fail open rather than gate on a
+	// bogus one.
 	st, stOK := readState()
-	deviceID := st.DeviceID
-	if deviceID == "" || deviceID == "unknown" {
-		probeCtx, cancel := context.WithTimeout(ctx, serialProbeTimeout)
-		deviceID = device.SerialNumber(probeCtx, exec)
-		cancel()
+	deviceID := strings.TrimSpace(guestDeviceID)
+	if deviceID != "" {
+		log.Debug("run-gate: gating as WSL guest %s", deviceID)
+	} else {
+		deviceID = st.DeviceID
+		if deviceID == "" || deviceID == "unknown" {
+			probeCtx, cancel := context.WithTimeout(ctx, serialProbeTimeout)
+			deviceID = device.SerialNumber(probeCtx, exec)
+			cancel()
+		}
 	}
 	if deviceID == "" || deviceID == "unknown" {
 		log.Debug("run-gate: no usable device id — failing open")

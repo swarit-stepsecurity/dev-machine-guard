@@ -88,14 +88,13 @@ func triggerWSLScans(exec executor.Executor, log *progress.Logger, cfg *cli.Conf
 			res.Outcome = wslScanSkippedNoUser
 		default:
 			// No -u: `wsl -e` already runs as the distro's default user, which
-			// is whose home we want. --force-scan because the guest's own run
-			// gate would check in under the distro's local serial rather than
-			// the derived guest id, and gate against the wrong device record.
+			// is whose home we want. No --force-scan either: the guest gates
+			// itself on the tenant's cadence, checking in under the derived
+			// guest id we hand it, so a distro scanned an hour ago skips.
 			err := exec.StartDetached("wsl.exe",
 				"-d", d.Name,
 				"-e", windowsPathToWSL(linuxBin),
 				"send-telemetry",
-				"--force-scan",
 				"--config="+guestConfig,
 				"--wsl-host-serial="+dev.SerialNumber,
 				"--wsl-distro-id="+d.DistroID,
