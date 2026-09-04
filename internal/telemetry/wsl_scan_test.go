@@ -169,6 +169,10 @@ func TestTriggerWSLScans_LaunchFailureIsIsolated(t *testing.T) {
 
 func TestWindowsPathToWSL(t *testing.T) {
 	cases := map[string]string{
+		// The MSI installs here, so this is the production path — note the
+		// space. It needs no quoting because the spawn passes argv directly
+		// with no shell in between.
+		`C:\Program Files\StepSecurity\dmg-linux`: "/mnt/c/Program Files/StepSecurity/dmg-linux",
 		`C:\ProgramData\StepSecurity\config.json`: "/mnt/c/ProgramData/StepSecurity/config.json",
 		`D:\tools\dmg-linux`:                      "/mnt/d/tools/dmg-linux",
 		`c:\lower`:                                "/mnt/c/lower",
