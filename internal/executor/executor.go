@@ -90,18 +90,30 @@ type Real struct {
 func NewReal() *Real { return &Real{} }
 
 // StartDetached starts the process and lets it go. It deliberately does not
-// Wait: the child must survive this process exiting, which on Windows it does
-// — a scheduled task's spawned child keeps running after the task instance
-// ends (measured). Release drops our handle so nothing here holds the child.
+// Wait: the child must outlive this process.
+//
+// detachAttrs supplies platform creation flags that keep the child from being
+// reaped with this process, most isolated first, falling back because job
+// breakaway fails outright when the job forbids it. See detach_windows.go: a
+// plain spawn was not observed to fail, so those flags are insurance against a
+// silent failure mode rather than a fix for a measured one.
+//
+// Release drops our handle afterwards so nothing here holds the child.
 func (r *Real) StartDetached(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	if err := cmd.Start(); err != nil {
-		return err
+	attrs := detachAttrs()
+	var err error
+	for _, attr := range attrs {
+		cmd := exec.Command(name, args...)
+		cmd.SysProcAttr = attr
+		if err = cmd.Start(); err != nil {
+			continue // try the next, less isolated, form
+		}
+		if cmd.Process == nil {
+			return nil
+		}
+		return cmd.Process.Release()
 	}
-	if cmd.Process == nil {
-		return nil
-	}
-	return cmd.Process.Release()
+	return err
 }
 
 func (r *Real) Run(ctx context.Context, name string, args ...string) (string, string, int, error) {
