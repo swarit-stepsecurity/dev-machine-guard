@@ -57,6 +57,7 @@ func TestSkipper_NetworkVolumeMatching(t *testing.T) {
 		{"dotted sibling of mount not skipped", "/Users/alice/OrbStack.old", "/Users/alice", false},
 		{"unrelated path not skipped", "/Users/alice/code", "/Users/alice", false},
 		{"explicit walk root opts in", "/Users/alice/OrbStack", "/Users/alice/OrbStack", false},
+		{"child of explicit walk root opts in too", "/Users/alice/OrbStack/docker/containers", "/Users/alice/OrbStack", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

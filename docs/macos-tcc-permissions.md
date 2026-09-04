@@ -280,7 +280,7 @@ reproduced here so the payload shape is visible in context:
                         <key>IdentifierType</key>
                         <string>path</string>
                         <key>CodeRequirement</key>
-                        <string>anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "D63S9HLM4L"</string>
+                        <string>identifier "stepsecurity-dev-machine-guard" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "D63S9HLM4L"</string>
                         <key>Allowed</key>
                         <true/>
                         <key>Comment</key>
@@ -295,7 +295,7 @@ reproduced here so the payload shape is visible in context:
                         <key>IdentifierType</key>
                         <string>path</string>
                         <key>CodeRequirement</key>
-                        <string>anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "D63S9HLM4L"</string>
+                        <string>identifier "stepsecurity-dev-machine-guard" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "D63S9HLM4L"</string>
                         <key>Allowed</key>
                         <true/>
                         <key>Comment</key>

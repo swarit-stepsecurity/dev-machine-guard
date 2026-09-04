@@ -122,7 +122,9 @@ func build(home string, protected bool, mounts []string) *Skipper {
 // short-circuited. When path equals walkRoot the result is always false:
 // passing --search-dirs ~/Documents (or --search-dirs ~/OrbStack) is an
 // explicit opt-in, and the walk root must be entered for anything to
-// happen.
+// happen. That opt-in holds for the whole walk, not just the root itself:
+// if walkRoot is inside a skipped volume, descendants of it are not
+// re-skipped as the walk descends into them.
 //
 // Callers must consult this BEFORE reading the directory: it is the
 // mountpoint's ReadDir, not the parent's listing of it, that fires the
@@ -135,7 +137,8 @@ func (s *Skipper) ShouldSkip(path, walkRoot string) bool {
 		return false
 	}
 	cleaned := filepath.Clean(path)
-	if filepath.Clean(walkRoot) == cleaned {
+	cleanRoot := filepath.Clean(walkRoot)
+	if cleanRoot == cleaned {
 		return false
 	}
 	if _, ok := s.paths[cleaned]; ok {
@@ -147,6 +150,9 @@ func (s *Skipper) ShouldSkip(path, walkRoot string) bool {
 			s.recordHit(cleaned)
 			return true
 		}
+	}
+	if s.rootWithinVolume(cleanRoot) {
+		return false
 	}
 	return s.withinNetworkVolume(cleaned)
 }
@@ -193,6 +199,19 @@ func (s *Skipper) withinNetworkVolume(cleaned string) bool {
 	for _, v := range s.volumes {
 		if hasDirPrefix(cleaned, v) {
 			s.recordHit(v)
+			return true
+		}
+	}
+	return false
+}
+
+// rootWithinVolume reports whether cleanRoot — the walk root, already
+// filepath.Clean'd — is itself a skipped volume or nested inside one.
+// Unlike withinNetworkVolume this does not record a hit: naming that root
+// via --search-dirs is the opt-in, not a skip.
+func (s *Skipper) rootWithinVolume(cleanRoot string) bool {
+	for _, v := range s.volumes {
+		if hasDirPrefix(cleanRoot, v) {
 			return true
 		}
 	}
