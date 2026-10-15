@@ -310,7 +310,7 @@ func main() {
 		}
 		switch runtime.GOOS {
 		case model.PlatformWindows:
-			if err := schtasks.Install(exec, log); err != nil {
+			if err := schtasks.Install(exec, log, telemetry.ExecutionDeadline(config.MaxExecutionDuration)); err != nil {
 				log.Error("%v", err)
 				os.Exit(1)
 			}
