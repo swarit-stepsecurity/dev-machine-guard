@@ -289,16 +289,16 @@ func main() {
 		// failed, so an emergency unassignment/offboarding directive is never
 		// blocked by a telemetry outage — hence before the error-exit below.
 		if targetOK {
-			runPackageConfigEnforce(targetExec, log)
+			runPackageConfigEnforce(targetExec, log, cfg)
 		}
 		if telemetryErr != nil {
 			restoreTarget()
 			log.Error("%v", telemetryErr)
 			os.Exit(1)
 		}
-		runHookStateReconcile(exec, log)
+		runHookStateReconcile(exec, log, cfg)
 		if targetOK {
-			runIDEExtensionEnforce(targetExec, log)
+			runIDEExtensionEnforce(targetExec, log, cfg)
 		}
 		restoreTarget()
 
@@ -354,7 +354,7 @@ func main() {
 			if err := schtasks.RunNow(exec, log); err != nil {
 				log.Warn("could not trigger initial scan (%v) — the scheduled task will fire on its next interval", err)
 			}
-			runHookStateReconcile(exec, log)
+			runHookStateReconcile(exec, log, cfg)
 			return
 		}
 
@@ -365,7 +365,7 @@ func main() {
 		// lock. Mirrors the Windows-SYSTEM path above; the launchd-triggered
 		// scan's output lands in agent.log.
 		if runtime.GOOS == model.PlatformDarwin {
-			runHookStateReconcile(exec, log)
+			runHookStateReconcile(exec, log, cfg)
 			return
 		}
 
@@ -402,7 +402,7 @@ func main() {
 		// mode, and the Windows-SYSTEM / macOS paths already returned above).
 		targetExec, restoreTarget, targetOK := resolveDevicePolicyTarget(exec, log)
 		if runtime.GOOS != model.PlatformWindows && targetOK {
-			runPackageConfigEnforce(targetExec, log)
+			runPackageConfigEnforce(targetExec, log, cfg)
 		}
 
 		if telemetryErr != nil {
@@ -420,9 +420,9 @@ func main() {
 				os.Exit(1)
 			}
 		}
-		runHookStateReconcile(exec, log)
+		runHookStateReconcile(exec, log, cfg)
 		if targetOK {
-			runIDEExtensionEnforce(targetExec, log)
+			runIDEExtensionEnforce(targetExec, log, cfg)
 		}
 		restoreTarget()
 
@@ -541,7 +541,7 @@ func main() {
 			// manually invoked one, and even when telemetry failed.
 			targetExec, restoreTarget, targetOK := resolveDevicePolicyTarget(exec, log)
 			if targetOK {
-				runPackageConfigEnforce(targetExec, log)
+				runPackageConfigEnforce(targetExec, log, cfg)
 			}
 			restoreTarget()
 			if telemetryErr != nil {
@@ -741,7 +741,7 @@ func writeHeartbeat(exec executor.Executor, command string, log *progress.Logger
 	}
 }
 
-func runHookStateReconcile(exec executor.Executor, log *progress.Logger) {
+func runHookStateReconcile(exec executor.Executor, log *progress.Logger, runCfg *cli.Config) {
 	if !featuregate.IsEnabled(featuregate.FeatureAIAgentHooks) {
 		log.Debug("hook-state reconcile: skipped (feature gated)")
 		return
@@ -761,8 +761,9 @@ func runHookStateReconcile(exec executor.Executor, log *progress.Logger) {
 	defer cancel()
 
 	dev := device.Gather(ctx, exec)
-	if dev.SerialNumber == "" || dev.SerialNumber == "unknown" {
-		log.Warn("hook-state reconcile: device serial unresolved; skipping")
+	deviceID := device.IDForGuest(dev, runCfg.WSLHostSerial, runCfg.WSLDistroID)
+	if deviceID == "" || deviceID == "unknown" {
+		log.Warn("hook-state reconcile: device identity unresolved; skipping")
 		return
 	}
 
@@ -770,7 +771,7 @@ func runHookStateReconcile(exec executor.Executor, log *progress.Logger) {
 		Exec:        exec,
 		Fetcher:     fetcher,
 		CustomerID:  cfg.CustomerID,
-		DeviceID:    dev.SerialNumber,
+		DeviceID:    deviceID,
 		Stdout:      os.Stdout,
 		Stderr:      os.Stderr,
 		InstallFn:   aiagentscli.RunInstall,
@@ -806,7 +807,7 @@ func resolveDevicePolicyTarget(exec executor.Executor, log *progress.Logger) (ex
 // reconciler's probe and reported mdm_managed instead. Gated behind
 // FeatureDevicePolicy and a silent no-op in community mode (enterprise
 // config missing). Failures are logged but never crash main.
-func runIDEExtensionEnforce(exec executor.Executor, log *progress.Logger) {
+func runIDEExtensionEnforce(exec executor.Executor, log *progress.Logger, runCfg *cli.Config) {
 	if !featuregate.IsEnabled(featuregate.FeatureDevicePolicy) {
 		log.Debug("ide-extension enforce: skipped (feature gated)")
 		return
@@ -838,8 +839,9 @@ func runIDEExtensionEnforce(exec executor.Executor, log *progress.Logger) {
 	defer cancel()
 
 	dev := device.Gather(ctx, exec)
-	if dev.SerialNumber == "" || dev.SerialNumber == "unknown" {
-		log.Warn("ide-extension enforce: device serial unresolved; skipping")
+	deviceID := device.IDForGuest(dev, runCfg.WSLHostSerial, runCfg.WSLDistroID)
+	if deviceID == "" || deviceID == "unknown" {
+		log.Warn("ide-extension enforce: device identity unresolved; skipping")
 		return
 	}
 
@@ -848,7 +850,7 @@ func runIDEExtensionEnforce(exec executor.Executor, log *progress.Logger) {
 		Reporter:   reporter,
 		Writer:     writer,
 		CustomerID: cfg.CustomerID,
-		DeviceID:   dev.SerialNumber,
+		DeviceID:   deviceID,
 		Platform:   dev.Platform,
 		// Probe defaults to devicepolicy.ProbeManagedPolicy (per-OS) when nil.
 		Logf:  func(format string, args ...any) { log.Debug(format, args...) },
@@ -861,7 +863,7 @@ func runIDEExtensionEnforce(exec executor.Executor, log *progress.Logger) {
 
 // runPackageConfigEnforce runs npm, PyPI, and Go independently after resolving their
 // shared enterprise and device identity once. Failures never crash main.
-func runPackageConfigEnforce(exec executor.Executor, log *progress.Logger) {
+func runPackageConfigEnforce(exec executor.Executor, log *progress.Logger, runCfg *cli.Config) {
 	cfg, ok := ingest.Snapshot()
 	if !ok {
 		log.Debug("package-config enforce: skipped (no enterprise config)")
@@ -881,11 +883,12 @@ func runPackageConfigEnforce(exec executor.Executor, log *progress.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), devicePolicyEnforceTimeout)
 	dev := device.Gather(ctx, exec)
 	cancel()
-	if dev.SerialNumber == "" || dev.SerialNumber == "unknown" {
-		log.Warn("package-config enforce: device serial unresolved; skipping")
+	deviceID := device.IDForGuest(dev, runCfg.WSLHostSerial, runCfg.WSLDistroID)
+	if deviceID == "" || deviceID == "unknown" {
+		log.Warn("package-config enforce: device identity unresolved; skipping")
 		return
 	}
-	runPackageConfigLanes(exec, log, fetcher, reporter, cfg.CustomerID, dev.SerialNumber, dev.Platform)
+	runPackageConfigLanes(exec, log, fetcher, reporter, cfg.CustomerID, deviceID, dev.Platform)
 }
 
 func runPackageConfigLanes(exec executor.Executor, log *progress.Logger, fetcher devicepolicy.Fetcher, reporter devicepolicy.Reporter, customerID, serial, platform string) {

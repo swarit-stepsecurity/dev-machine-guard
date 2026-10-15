@@ -17,6 +17,7 @@ import (
 
 // Default placeholders (replaced by backend for enterprise installation scripts).
 var (
+	DeviceID            string // Optional device identity override; empty uses the machine serial.
 	CustomerID          = "{{CUSTOMER_ID}}"
 	APIEndpoint         = "{{API_ENDPOINT}}"
 	APIKey              = "{{API_KEY}}" //#nosec G101 -- build-time placeholder substituted by the backend installer; the literal is not a real credential.
@@ -74,6 +75,7 @@ var MaxExecutionDuration string
 
 // ConfigFile is the JSON structure persisted to ~/.stepsecurity/config.json.
 type ConfigFile struct {
+	DeviceID              string   `json:"device_id,omitempty"`
 	CustomerID            string   `json:"customer_id,omitempty"`
 	APIEndpoint           string   `json:"api_endpoint,omitempty"`
 	APIKey                string   `json:"api_key,omitempty"`
@@ -212,6 +214,9 @@ func Load() {
 	}
 	cfg := *cfgPtr
 
+	if DeviceID == "" {
+		DeviceID = strings.TrimSpace(cfg.DeviceID)
+	}
 	if cfg.CustomerID != "" && isPlaceholder(CustomerID) {
 		CustomerID = cfg.CustomerID
 	}
@@ -287,6 +292,7 @@ func RunConfigure() error {
 	fmt.Println("To clear a value, enter a single dash (-).")
 	fmt.Println()
 
+	existing.DeviceID = promptValue(reader, "Device ID (optional; default = machine serial)", existing.DeviceID)
 	existing.CustomerID = promptValue(reader, "Customer ID", existing.CustomerID)
 	existing.APIEndpoint = promptValue(reader, "API Endpoint", existing.APIEndpoint)
 	existing.APIKey = promptSecret(reader, "API Key", existing.APIKey)
@@ -631,6 +637,7 @@ func ShowConfigure() {
 	}
 
 	fmt.Printf("Configuration (%s):\n\n", ConfigFilePath())
+	fmt.Printf("  %-24s %s\n", "Device ID:", displayDeviceID(cfg.DeviceID))
 	fmt.Printf("  %-24s %s\n", "Customer ID:", displayValue(cfg.CustomerID))
 	fmt.Printf("  %-24s %s\n", "API Endpoint:", displayValue(cfg.APIEndpoint))
 	fmt.Printf("  %-24s %s\n", "API Key:", maskSecret(cfg.APIKey))
@@ -651,6 +658,13 @@ func ShowConfigure() {
 	}
 	fmt.Printf("  %-24s %s\n", "Log Level:", displayLogLevel(cfg.LogLevel))
 	fmt.Printf("  %-24s %s\n", "Install Directory:", displayInstallDir(cfg.InstallDir))
+}
+
+func displayDeviceID(v string) string {
+	if v = strings.TrimSpace(v); v == "" {
+		return "machine serial (default)"
+	}
+	return v
 }
 
 func displayValue(v string) string {
