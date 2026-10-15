@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,6 +54,9 @@ var s3PutAttemptTimeout = 3 * time.Minute
 // CurrentPayloadSchemaVersion is bumped when the delta-protocol wire shape
 // changes in a way the backend cares about. 0 = legacy agent.
 const CurrentPayloadSchemaVersion = 1
+
+// serialProbeTimeout bounds the pre-lock serial probe (macOS ioreg is the slow one).
+const serialProbeTimeout = 10 * time.Second
 
 // Payload is the enterprise telemetry JSON structure.
 type Payload struct {
@@ -240,9 +244,9 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	}
 	defer reportUsageOnce()
 
-	// deviceID is populated once device.Gather completes; the closure below
-	// captures it by reference so the deferred failure report uses whatever is
-	// known at the point of failure (empty is tolerated by the backend).
+	// deviceID is set from a cheap serial probe before the lock, then from
+	// device.Gather; the closure below captures it by reference so failure
+	// reports carry whatever is known at that point.
 	var deviceID string
 
 	// Ensures exactly one "failed" report lands per run. The signal handler
@@ -366,8 +370,7 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 		case sig := <-sigCh:
 			fmt.Fprintf(os.Stderr, "\n[cancel] received %s, reporting failure before exit\n", sig)
 			reportFailedOnce(fmt.Sprintf("%s: %s", runStatusCancelled, sig))
-			// Best-effort lock cleanup. A new run can recover from a stale
-			// lock file on its own via lock.Acquire; this is just polite.
+			// The OS drops the instance lock on exit.
 			os.Exit(130) // conventional exit code for SIGINT
 		case <-sigHandlerDone:
 			return
@@ -426,6 +429,12 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 	fmt.Fprintf(os.Stderr, "StepSecurity Device Agent v%s\n", buildinfo.Version)
 	fmt.Fprintf(os.Stderr, "==========================================\n\n")
 
+	// Resolve the serial before the lock so a refused run is attributable
+	// (the backend rejects an empty device_id).
+	serialCtx, serialCancel := context.WithTimeout(ctx, serialProbeTimeout)
+	deviceID = device.SerialNumber(serialCtx, exec)
+	serialCancel()
+
 	// Acquire lock
 	lk, err := lock.Acquire(exec)
 	if err != nil {
@@ -438,7 +447,11 @@ func Run(exec executor.Executor, log *progress.Logger, cfg *cli.Config) (err err
 		// reportFailedOnce is idempotent, so the deferred handler that also
 		// fires on the error return is a no-op.
 		log.Progress("Lock acquisition failed (PID %d): %v — exiting", os.Getpid(), err)
-		reportFailedOnce(fmt.Sprintf("lock acquisition failed: %v", err))
+		if errors.Is(err, lock.ErrHeld) {
+			reportFailedOnce(fmt.Sprintf("lock_held: %v", err))
+		} else {
+			reportFailedOnce(fmt.Sprintf("lock acquisition failed: %v", err))
+		}
 		return fmt.Errorf("acquiring lock: %w", err)
 	}
 	log.Debug("lock acquired (pid=%d)", os.Getpid())
