@@ -34,6 +34,8 @@ var (
 	// SystemPolicyNetworkVolumes prompt on machines with no PPPC
 	// pre-approval. Fleets that cannot pre-approve trade that coverage away
 	// by setting this to false. See docs/macos-tcc-permissions.md.
+	// On Linux and Windows nil means skip remote mounts (a dead server can
+	// hang the walk); only an explicit true walks them.
 	IncludeNetworkVolumes *bool
 	ColorMode             string // "" means auto
 	OutputFormat          string // "" means default (pretty)
